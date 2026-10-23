@@ -1,0 +1,14 @@
+# Normalize line endings in the repository.
+* text=auto eol=lf
+
+# Shell scripts must keep LF everywhere, or bash fails with "\r: command not found".
+*.sh text eol=lf
+# PowerShell scripts are friendliest with CRLF on Windows.
+*.ps1 text eol=crlf
+
+# Binary files.
+*.png binary
+*.jpg binary
+*.pdf binary
+*.xlsx binary
+*.pptx binary

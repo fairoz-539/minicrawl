@@ -1,0 +1,44 @@
+# minicrawl + a private SearXNG for /v1/search.
+#
+#   cp .env.example .env      # then set API_KEY in .env
+#   docker compose up -d --build
+#
+# API: http://localhost:3002   Docs: http://localhost:3002/docs
+name: minicrawl
+
+services:
+  minicrawl:
+    build: .
+    image: minicrawl:local
+    ports:
+      # MINICRAWL_BIND=127.0.0.1 keeps it reachable from this machine only.
+      - "${MINICRAWL_BIND:-0.0.0.0}:${MINICRAWL_PORT:-3002}:3002"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Always use the bundled SearXNG, whatever .env says for local runs.
+      SEARXNG_ENDPOINT: http://searxng:8080
+      DB_PATH: /data/minicrawl.db
+    volumes:
+      - minicrawl-data:/data
+    shm_size: 1gb # Chromium needs more shared memory than Docker's 64 MB default
+    init: true
+    depends_on:
+      - searxng
+    restart: unless-stopped
+
+  searxng:
+    image: searxng/searxng:latest
+    # No published port: only minicrawl can reach it, on the internal network.
+    volumes:
+      - ./deploy/searxng:/etc/searxng
+      - searxng-cache:/var/cache/searxng
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-minicrawl-internal-change-me}
+      SEARXNG_BASE_URL: http://searxng:8080/
+    restart: unless-stopped
+
+volumes:
+  minicrawl-data:
+  searxng-cache:

@@ -1,0 +1,57 @@
+{
+  "name": "minicrawl",
+  "version": "1.0.0",
+  "description": "Self-hosted, Firecrawl-compatible web scraping API: scrape, crawl, map, search and AI extraction",
+  "keywords": [
+    "web-scraping",
+    "crawler",
+    "firecrawl",
+    "markdown",
+    "llm",
+    "rag",
+    "playwright",
+    "ocr",
+    "self-hosted",
+    "api"
+  ],
+  "homepage": "https://github.com/fairoz-539/minicrawl#readme",
+  "bugs": {
+    "url": "https://github.com/fairoz-539/minicrawl/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fairoz-539/minicrawl.git"
+  },
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning src/server.js",
+    "test": "node --disable-warning=ExperimentalWarning --test --test-timeout=90000 \"test/**/*.test.js\"",
+    "docker:up": "docker compose up -d --build",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f minicrawl"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.2.0",
+    "@arcships/light-ocr": "^0.5.9",
+    "@napi-rs/canvas": "^1.0.13",
+    "cheerio": "^1.2.0",
+    "exceljs": "^4.4.0",
+    "express": "^5.3.0",
+    "jszip": "^3.10.2",
+    "mammoth": "^1.13.0",
+    "playwright": "^1.64.1",
+    "robots-parser": "^3.0.1",
+    "swagger-ui-dist": "^5.34.0",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2",
+    "undici": "^7.30.1",
+    "unpdf": "^1.9.1",
+    "zod": "^3.25.76",
+    "zod-to-json-schema": "^3.25.2"
+  }
+}

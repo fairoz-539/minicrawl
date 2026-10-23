@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="360" height="96" viewBox="0 0 360 96" role="img" aria-label="minicrawl">
+  <title>minicrawl</title>
+  <!-- Icon: a page being read line by line, with a crawl path. -->
+  <rect x="4" y="8" width="80" height="80" rx="18" fill="#F97316"/>
+  <rect x="22" y="26" width="44" height="6" rx="3" fill="#FFFFFF"/>
+  <rect x="22" y="40" width="32" height="6" rx="3" fill="#FFFFFF" opacity="0.85"/>
+  <rect x="22" y="54" width="38" height="6" rx="3" fill="#FFFFFF" opacity="0.7"/>
+  <circle cx="62" cy="66" r="9" fill="none" stroke="#FFFFFF" stroke-width="5"/>
+  <line x1="68.5" y1="72.5" x2="76" y2="80" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round"/>
+  <!-- Wordmark: mid-grey reads on both light and dark GitHub themes. -->
+  <text x="104" y="63" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="44" font-weight="700" fill="#8B8F98">mini<tspan fill="#F97316">crawl</tspan></text>
+</svg>

@@ -1,0 +1,13 @@
+node_modules
+test
+docs
+*.db
+*.db-wal
+*.db-shm
+.env
+.git
+.gitignore
+Dockerfile
+docker-compose.yml
+deploy
+README.md

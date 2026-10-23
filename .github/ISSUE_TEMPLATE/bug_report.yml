@@ -1,0 +1,48 @@
+name: Bug report
+description: Something doesn't work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please **don't include your API keys** or other secrets.
+        Security issues: see SECURITY.md instead of filing here.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what you got.
+    validations:
+      required: true
+  - type: textarea
+    id: request
+    attributes:
+      label: Request
+      description: The endpoint and JSON body (remove secrets). The URL, if it's public.
+      render: json
+  - type: textarea
+    id: response
+    attributes:
+      label: Response or error
+      description: The response body, and any relevant `docker compose logs minicrawl` output.
+      render: text
+  - type: textarea
+    id: health
+    attributes:
+      label: "`GET /health` output"
+      render: json
+  - type: dropdown
+    id: install
+    attributes:
+      label: How do you run minicrawl?
+      options:
+        - Docker Compose
+        - docker run
+        - Node.js (npm start)
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS and architecture
+      placeholder: "e.g. Windows 11 x64, Ubuntu 24.04 arm64, macOS 15 Apple Silicon"

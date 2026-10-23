@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Self-hosting guide and troubleshooting
+    url: https://github.com/fairoz-539/minicrawl/blob/main/docs/SELF_HOSTING.md#troubleshooting
+    about: Most setup problems are covered here.
+  - name: Report a security vulnerability
+    url: https://github.com/fairoz-539/minicrawl/security/advisories/new
+    about: Please report security issues privately.
