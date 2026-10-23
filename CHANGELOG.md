@@ -4,8 +4,14 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-24
+
 ### Added
 
+- **Prebuilt Docker image** on GitHub Container Registry, for amd64 and arm64: `ghcr.io/fairoz-539/minicrawl` (`:latest`, `:1.1.0`, `:edge` for main). `docker compose pull && docker compose up -d` starts in about a minute.
+- **Data cleanup:** crawl and extract results are deleted once they expire (`DATA_TTL_HOURS`, default 24, matching `expiresAt`), and `/v1/map`'s URL index is trimmed after `SEEN_URLS_TTL_DAYS` (default 30). Running crawls are never touched.
+- **Release automation:** tags `v*` create a GitHub Release from this changelog; `mcp-v*` / `py-v*` publish to npm / PyPI with trusted publishing (no stored tokens).
+- **Animated terminal demo** in the README (`scripts/make-demo-svg.mjs`).
 - **MCP server** built in at `POST /mcp` (Streamable HTTP, stateless, API-key protected), with tools `minicrawl_scrape`, `minicrawl_map`, `minicrawl_search`, `minicrawl_crawl`, `minicrawl_crawl_status`, `minicrawl_extract` and `minicrawl_extract_status`. Works with Claude Code, Cursor and VS Code.
 - **`minicrawl-mcp`** (`integrations/mcp`): a stdio bridge to `/mcp` for Claude Desktop and other local-only MCP clients.
 - **Python package `minicrawl-py`** (`integrations/python`, imports as `minicrawl`): client plus a LangChain `MinicrawlLoader` and a LlamaIndex `MinicrawlReader`.
@@ -14,6 +20,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- Dependabot proposes minor and patch updates only (major versions and non-LTS Node are upgraded by hand).
+- `expiresAt` follows `DATA_TTL_HOURS` (and is `null` when data is kept forever).
 - REST routes and MCP tools share one implementation (`src/api.js`). Unknown crawl/extract ids now return `code: "NOT_FOUND"`.
 
 ## [1.0.0] - 2026-10-24
@@ -36,5 +44,6 @@ First public release.
 - **Deployment:** Dockerfile, Docker Compose with private SearXNG, health checks, `scripts/setup.sh` / `setup.ps1` to generate per-install keys.
 - **Compatibility** with the official Firecrawl JS SDK's v1 client (`FirecrawlAppV1`).
 
-[Unreleased]: https://github.com/fairoz-539/minicrawl/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/fairoz-539/minicrawl/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/fairoz-539/minicrawl/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/fairoz-539/minicrawl/releases/tag/v1.0.0

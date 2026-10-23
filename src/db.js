@@ -255,6 +255,52 @@ export class CrawlStore {
     } catch {}
   }
 
+  /**
+   * Delete data past its expiry, in bounded batches so the queue isn't
+   * locked for long. Running crawls are never touched.
+   *  - crawls (and their jobs, visited set, robots log) older than dataTtlMs
+   *  - finished standalone jobs (extracts) older than dataTtlMs
+   *  - URL-index entries (used by /map) not seen for seenTtlMs
+   * A TTL of 0 keeps that data forever.
+   * @returns {{crawls: number, jobs: number, seenUrls: number}}
+   */
+  pruneExpired({ dataTtlMs, seenTtlMs, batch = 200, now = Date.now() }) {
+    const out = { crawls: 0, jobs: 0, seenUrls: 0 };
+    const db = this.db;
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      if (dataTtlMs > 0) {
+        const cutoff = now - dataTtlMs;
+        const ids = db
+          .prepare("SELECT id FROM crawls WHERE status != 'scraping' AND created_at < ? LIMIT ?")
+          .all(cutoff, batch)
+          .map(r => r.id);
+        for (const id of ids) {
+          out.jobs += db.prepare("DELETE FROM jobs WHERE group_id = ?").run(id).changes;
+          db.prepare("DELETE FROM visited WHERE crawl_id = ?").run(id);
+          db.prepare("DELETE FROM robots_blocked WHERE crawl_id = ?").run(id);
+          out.crawls += db.prepare("DELETE FROM crawls WHERE id = ?").run(id).changes;
+        }
+        // jobs.created_at is stored in ms × 1000 (see Queue.add).
+        out.jobs += db
+          .prepare(`DELETE FROM jobs WHERE rowid IN (
+            SELECT rowid FROM jobs WHERE group_id IS NULL AND status IN ('completed', 'failed') AND created_at < ? LIMIT ?)`)
+          .run(cutoff * 1000, batch * 10).changes;
+      }
+      if (seenTtlMs > 0) {
+        out.seenUrls = db
+          // WITHOUT ROWID table: select by its primary key.
+          .prepare("DELETE FROM seen_urls WHERE (host, url) IN (SELECT host, url FROM seen_urls WHERE last_seen < ? LIMIT ?)")
+          .run(now - seenTtlMs, batch * 50).changes;
+      }
+      db.exec("COMMIT");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw err;
+    }
+    return out;
+  }
+
   seenForHost(host, limit = 10_000) {
     const bare = host.replace(/^www\./, "");
     return this.stmts.seenForHost.all(bare, `%.${bare}`, limit);

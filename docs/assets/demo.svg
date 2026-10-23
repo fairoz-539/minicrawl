@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="410" viewBox="0 0 900 410" role="img" aria-label="minicrawl demo: setup, docker compose up, then scraping a JavaScript-rendered page to markdown">
+<title>minicrawl demo</title>
+<style>
+text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;font-size:14px;fill:#c9d1d9;clip-path:inset(0 100% 0 0)}
+.prompt{fill:#3fb950;font-weight:700}.cmd{fill:#e6edf3}.muted{fill:#8b949e}.ok{fill:#3fb950}.accent{fill:#f97316;font-weight:700}.heading{fill:#79c0ff;font-weight:700}
+@keyframes l0{0%,1.82%{clip-path:inset(0 100% 0 0)}4.33%,96%{clip-path:inset(0 0 0 0)}100%{clip-path:inset(0 100% 0 0)}}.l0{animation:l0 22s linear infinite}
+@keyframes l1{0%,6.60%{clip-path:inset(0 100% 0 0)}6.83%,96%{clip-path:inset(0 0 0 0)}100%{clip-path:inset(0 100% 0 0)}}.l1{animation:l1 22s linear infinite}
+@keyframes l2{0%,9.56%{clip-path:inset(0 100% 0 0)}11.95%,96%{clip-path:inset(0 0 0 0)}100%{clip-path:inset(0 100% 0 0)}}.l2{animation:l2 22s linear infinite}
+@keyframes l3{0%,16.04%{clip-path:inset(0 100% 0 0)}16.27%,96%{clip-path:inset(0 0 0 0)}100%{clip-path:inset(0 100% 0 0)}}.l3{animation:l3 22s linear infinite}
+@keyframes l4{0%,17.63%{clip-path:inset(0 100% 0 0)}17.86%,96%{clip-path:inset(0 0 0 0)}100%{clip-path:inset(0 100% 0 0)}}.l4{animation:l4 22s linear infinite}
+@keyframes l5{0%,21.04%{clip-path:inset(0 100% 0 0)}28.94%,96%{clip-path:inset(0 0 0 0)}100%{clip-path:inset(0 100% 0 0)}}.l5{animation:l5 22s linear infinite}
+@keyframes l6{0%,28.94%{clip-path:inset(0 100% 0 0)}39.34%,96%{clip-path:inset(0 0 0 0)}100%{clip-path:inset(0 100% 0 0)}}.l6{animation:l6 22s linear infinite}
+@keyframes l7{0%,39.34%{clip-path:inset(0 100% 0 0)}45.20%,96%{clip-path:inset(0 0 0 0)}100%{clip-path:inset(0 100% 0 0)}}.l7{animation:l7 22s linear infinite}
+@keyframes l8{0%,55.20%{clip-path:inset(0 100% 0 0)}55.43%,96%{clip-path:inset(0 0 0 0)}100%{clip-path:inset(0 100% 0 0)}}.l8{animation:l8 22s linear infinite}
+@keyframes l9{0%,56.57%{clip-path:inset(0 100% 0 0)}56.79%,96%{clip-path:inset(0 0 0 0)}100%{clip-path:inset(0 100% 0 0)}}.l9{animation:l9 22s linear infinite}
+@keyframes l10{0%,57.70%{clip-path:inset(0 100% 0 0)}57.93%,96%{clip-path:inset(0 0 0 0)}100%{clip-path:inset(0 100% 0 0)}}.l10{animation:l10 22s linear infinite}
+@keyframes l11{0%,58.61%{clip-path:inset(0 100% 0 0)}58.84%,96%{clip-path:inset(0 0 0 0)}100%{clip-path:inset(0 100% 0 0)}}.l11{animation:l11 22s linear infinite}
+@keyframes l12{0%,59.52%{clip-path:inset(0 100% 0 0)}59.75%,96%{clip-path:inset(0 0 0 0)}100%{clip-path:inset(0 100% 0 0)}}.l12{animation:l12 22s linear infinite}
+@keyframes l13{0%,60.43%{clip-path:inset(0 100% 0 0)}60.66%,96%{clip-path:inset(0 0 0 0)}100%{clip-path:inset(0 100% 0 0)}}.l13{animation:l13 22s linear infinite}
+@keyframes l14{0%,64.75%{clip-path:inset(0 100% 0 0)}64.98%,96%{clip-path:inset(0 0 0 0)}100%{clip-path:inset(0 100% 0 0)}}.l14{animation:l14 22s linear infinite}
+@media (prefers-reduced-motion:reduce){text{animation:none!important;clip-path:none}}
+</style>
+<rect width="900" height="410" rx="10" fill="#0d1117"/>
+<rect width="900" height="34" rx="10" fill="#161b22"/><rect y="24" width="900" height="10" fill="#161b22"/>
+<circle cx="20" cy="17" r="6" fill="#ff5f57"/><circle cx="40" cy="17" r="6" fill="#febc2e"/><circle cx="60" cy="17" r="6" fill="#28c840"/>
+<text x="450" y="22" text-anchor="middle" style="fill:#8b949e;font-size:12px;clip-path:none;animation:none">minicrawl</text>
+<text x="22" y="52" class="l0 cmd" xml:space="preserve"><tspan class="prompt">$ </tspan>bash scripts/setup.sh</text>
+<text x="22" y="73" class="l1 out muted" xml:space="preserve">Created .env with a new API key. Use it as:  Authorization: Bearer &lt;key&gt;</text>
+<text x="22" y="94" class="l2 cmd" xml:space="preserve"><tspan class="prompt">$ </tspan>docker compose up -d</text>
+<text x="22" y="115" class="l3 out ok" xml:space="preserve"> ✔ Container minicrawl-searxng-1    Started</text>
+<text x="22" y="136" class="l4 out ok" xml:space="preserve"> ✔ Container minicrawl-minicrawl-1  Started</text>
+<text x="22" y="169.6" class="l5 cmd" xml:space="preserve"><tspan class="prompt">$ </tspan>curl -s localhost:3002/v1/scrape -H "Authorization: Bearer $KEY" \</text>
+<text x="22" y="190.6" class="l6 cmd" xml:space="preserve">    -H 'Content-Type: application/json' -d '{"url": "https://quotes.toscrape.com/js/"}' \</text>
+<text x="22" y="211.6" class="l7 cmd" xml:space="preserve">    | jq -r '.data.metadata.engine, .data.markdown'</text>
+<text x="22" y="232.6" class="l8 out accent" xml:space="preserve">browser</text>
+<text x="22" y="253.6" class="l9 out heading" xml:space="preserve"># [Quotes to Scrape](https://quotes.toscrape.com/)</text>
+<text x="22" y="274.6" class="l10 out" xml:space="preserve">“The world as we have created it is a process of our thinking. It cannot…</text>
+<text x="22" y="295.6" class="l11 out muted" xml:space="preserve">Tags: change deep-thoughts thinking world</text>
+<text x="22" y="316.6" class="l12 out" xml:space="preserve">“It is our choices, Harry, that show what we truly are, far more than our…</text>
+<text x="22" y="337.6" class="l13 out muted" xml:space="preserve">Tags: abilities choices</text>
+<text x="22" y="371.2" class="l14 out muted" xml:space="preserve"># Next: open http://localhost:3002/docs to try every endpoint in your browser</text>
+</svg>

@@ -9,6 +9,7 @@ import { getMapResults } from "./map.js";
 import { webSearch } from "./search.js";
 import { extractJson } from "./llm.js";
 import { mapLimit } from "./util.js";
+import { DATA_TTL_MS } from "./api.js";
 
 const CRAWL_PRIORITY = 20; // single scrapes would be 10; crawls yield to them
 
@@ -125,6 +126,10 @@ async function processExtract(ctx, job) {
 
 const handlers = { kickoff: processKickoff, scrape: processScrape, extract: processExtract };
 
+// How long a URL stays in the index /map draws on after it was last seen. 0 = forever.
+const SEEN_URLS_TTL_MS = Number(process.env.SEEN_URLS_TTL_DAYS ?? 30) * 24 * 60 * 60 * 1000;
+const CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
+
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 export function startWorkers(ctx, { concurrency = 4, pollMs = 100, staleLockMs = 60_000 } = {}) {
@@ -161,11 +166,27 @@ export function startWorkers(ctx, { concurrency = 4, pollMs = 100, staleLockMs =
     }
   }, 500);
 
+  // Expire old data (the crawl/extract `expiresAt` the API reports), so the
+  // database doesn't grow forever on a long-running server.
+  const prune = () => {
+    try {
+      const removed = ctx.store.pruneExpired({ dataTtlMs: DATA_TTL_MS, seenTtlMs: SEEN_URLS_TTL_MS });
+      if (removed.crawls || removed.jobs || removed.seenUrls) {
+        console.log(`cleanup: removed ${removed.crawls} crawls, ${removed.jobs} jobs, ${removed.seenUrls} index URLs`);
+      }
+    } catch (err) {
+      console.error("cleanup failed", err);
+    }
+  };
+  prune();
+  const cleanup = setInterval(prune, CLEANUP_INTERVAL_MS);
+
   const loops = Array.from({ length: concurrency }, loop);
   return {
     async stop() {
       stopping = true;
       clearInterval(maintenance);
+      clearInterval(cleanup);
       await Promise.all(loops);
     },
   };

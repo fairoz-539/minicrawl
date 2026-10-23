@@ -1,15 +1,16 @@
 # minicrawl + a private SearXNG for /v1/search.
 #
-#   cp .env.example .env      # then set API_KEY in .env
-#   docker compose up -d --build
+#   bash scripts/setup.sh                        # creates .env with your own API key
+#   docker compose pull && docker compose up -d  # prebuilt image (amd64/arm64)
+#   docker compose up -d --build                 # ...or build from this source
 #
 # API: http://localhost:3002   Docs: http://localhost:3002/docs
 name: minicrawl
 
 services:
   minicrawl:
+    image: ghcr.io/fairoz-539/minicrawl:${MINICRAWL_VERSION:-latest}
     build: .
-    image: minicrawl:local
     ports:
       # MINICRAWL_BIND=127.0.0.1 keeps it reachable from this machine only.
       - "${MINICRAWL_BIND:-0.0.0.0}:${MINICRAWL_PORT:-3002}:3002"

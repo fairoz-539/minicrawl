@@ -23,6 +23,10 @@ It reads web pages, JavaScript apps, PDFs, Office files and images, and runs on 
 
 </div>
 
+<p align="center">
+  <img src="docs/assets/demo.svg" alt="Terminal demo: run the setup script, docker compose up, then scrape a JavaScript-rendered page into markdown" width="860">
+</p>
+
 ---
 
 ## ✨ Why minicrawl?
@@ -55,14 +59,14 @@ You need [Docker](https://docs.docker.com/get-docker/) (Docker Desktop on Window
 git clone https://github.com/fairoz-539/minicrawl.git
 cd minicrawl
 bash scripts/setup.sh          # Windows: powershell -ExecutionPolicy Bypass -File scripts\setup.ps1
-docker compose up -d --build
+docker compose pull && docker compose up -d
 ```
 
 1. **Setup** creates `.env` with **your own** freshly generated API key, and optionally asks for your Anthropic key (needed only for AI extraction).
-2. **Docker** starts minicrawl, with headless Chromium and OCR built in, plus a private [SearXNG](https://github.com/searxng/searxng) for search.
+2. **Docker** pulls the prebuilt image (`ghcr.io/fairoz-539/minicrawl`, amd64 and arm64) and starts minicrawl, with headless Chromium and OCR built in, plus a private [SearXNG](https://github.com/searxng/searxng) for search.
 3. Open **http://localhost:3002/docs**, click **Authorize**, paste your key, and try every endpoint in the browser.
 
-The first build takes a few minutes; later starts take seconds. For servers, HTTPS, configuration and troubleshooting, see the **[self-hosting guide](docs/SELF_HOSTING.md)**.
+Prefer building from source? Use `docker compose up -d --build`. For servers, HTTPS, configuration and troubleshooting, see the **[self-hosting guide](docs/SELF_HOSTING.md)**.
 
 > [!IMPORTANT]
 > **Bring your own keys.** The repository contains no keys. Every installation generates its own API key, kept only in its own `.env`, which is git-ignored and excluded from Docker builds. AI extraction uses each installer's own `ANTHROPIC_API_KEY`. The container refuses to start without a key, or with a placeholder or weak one.

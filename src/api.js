@@ -10,7 +10,10 @@ import { webSearch } from "./search.js";
 import { mapLimit } from "./util.js";
 import { crawlBody, extractBody, mapBody, scrapeBody, searchBody } from "./schemas.js";
 
-export const CRAWL_TTL_MS = 24 * 60 * 60 * 1000;
+// How long crawl and extract results are kept: the `expiresAt` in responses.
+// The cleanup in src/worker.js deletes them afterwards. 0 = keep forever.
+export const DATA_TTL_MS = Number(process.env.DATA_TTL_HOURS ?? 24) * 60 * 60 * 1000;
+const expiresAt = createdMs => (DATA_TTL_MS > 0 ? new Date(createdMs + DATA_TTL_MS).toISOString() : null);
 export const PAGE_SIZE = 100;
 
 export class NotFoundError extends Error {
@@ -51,7 +54,7 @@ export function crawlStatus(ctx, id, { skip = 0, baseUrl, pageSize = PAGE_SIZE }
     total: counts.queued + counts.active + counts.completed + counts.failed,
     completed: counts.completed,
     creditsUsed: counts.completed,
-    expiresAt: new Date(crawl.created_at + CRAWL_TTL_MS).toISOString(),
+    expiresAt: expiresAt(crawl.created_at),
     // Omitted (not null) on the last page: the Firecrawl SDKs keep paging
     // while the key exists.
     ...(more && baseUrl ? { next: `${baseUrl}/v1/crawl/${crawl.id}?skip=${skip + pageSize}` } : {}),
@@ -113,6 +116,6 @@ export function extractStatus(ctx, id) {
     ...(r.warnings?.length ? { warning: r.warnings.join(" ") } : {}),
     ...(r.failed?.length ? { failedUrls: r.failed } : {}),
     ...(job.error ? { error: job.error } : {}),
-    expiresAt: new Date(Math.floor(job.created_at / 1000) + CRAWL_TTL_MS).toISOString(),
+    expiresAt: expiresAt(Math.floor(job.created_at / 1000)),
   };
 }

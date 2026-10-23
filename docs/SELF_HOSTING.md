@@ -37,8 +37,10 @@ Optional:
 git clone https://github.com/fairoz-539/minicrawl.git minicrawl
 cd minicrawl
 bash scripts/setup.sh          # Windows: powershell -ExecutionPolicy Bypass -File scripts\setup.ps1
-docker compose up -d --build
+docker compose pull && docker compose up -d
 ```
+
+`docker compose pull` downloads the **prebuilt image** (`ghcr.io/fairoz-539/minicrawl`, amd64 and arm64), so you're running in about a minute. To build from source instead, use `docker compose up -d --build`.
 
 The setup script writes `.env` with **your own** randomly generated API key and SearXNG secret, and optionally your own Anthropic key. It prints the API key once; it's also in `.env`.
 
@@ -46,7 +48,7 @@ The setup script writes `.env` with **your own** randomly generated API key and 
 
 Open **http://localhost:3002/docs**, click **Authorize**, paste your `API_KEY`, and try any endpoint.
 
-The first build takes 3–10 minutes: it downloads Node, Chromium and its libraries, and the OCR model. Later starts take seconds.
+The image is about 2.4 GB (Chromium and the OCR model are inside), so the first download takes a minute or two. Later starts take seconds.
 
 ---
 
@@ -108,8 +110,11 @@ To run with no key (only on a trusted machine), set `ALLOW_NO_AUTH=true` instead
 ### 5. Start it
 
 ```bash
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
+
+`pull` downloads the prebuilt image for your machine (amd64 or arm64). `MINICRAWL_VERSION` in `.env` pins a version, e.g. `1.1.0` (the default is `latest`). To build the image yourself from the source in this folder, run `docker compose up -d --build` instead (3–10 minutes the first time).
 
 This starts two containers:
 - **minicrawl**: the API, on port 3002
@@ -175,6 +180,11 @@ All settings live in `.env`. After changing it, run `docker compose up -d` to ap
 | `WORKERS` | `4` | Crawl/extract jobs in parallel |
 | `BROWSER_CONCURRENCY` | `4` | Browser pages open at once |
 | `MAX_OCR_PAGES` / `OCR_DPI` | `20` / `200` | Scanned-PDF OCR limits |
+| **Data retention** | | |
+| `DATA_TTL_HOURS` | `24` | How long crawl and extract results are kept (the `expiresAt` in responses). `0` = forever |
+| `SEEN_URLS_TTL_DAYS` | `30` | How long `/v1/map` remembers URLs it has seen. `0` = forever |
+| **Docker** | | |
+| `MINICRAWL_VERSION` | `latest` | Image tag to run, e.g. `1.1.0` (`edge` = newest `main`) |
 | `OCR_PROVIDER` | `auto` | `auto` uses the GPU when there is one (falls back to CPU on GPU errors); `cpu` never uses the GPU |
 | `INTERSTITIAL_WAIT_MS` | `15000` | Wait for "checking your browser" pages |
 | **Safety** | | |
@@ -251,14 +261,15 @@ server {
 ## Running without Compose (`docker run`)
 
 ```bash
-docker build -t minicrawl .
-docker volume create minicrawl-data
 docker run -d --name minicrawl -p 3002:3002 --shm-size=1g --init \
-  -e API_KEY=YOUR_KEY \
+  -e API_KEY="$(openssl rand -hex 32)" \
   -e SEARXNG_ENDPOINT=http://your-searxng:8080 \
   -v minicrawl-data:/data \
-  --restart unless-stopped minicrawl
+  --restart unless-stopped ghcr.io/fairoz-539/minicrawl:latest
+docker exec minicrawl printenv API_KEY     # the key it was started with
 ```
+
+To build the image yourself instead: `docker build -t minicrawl .`, then use `minicrawl` as the image name.
 
 Without `SEARXNG_ENDPOINT`, `/v1/search` falls back to DuckDuckGo, which usually blocks automated requests. To run your own SearXNG, use `deploy/searxng/settings.yml` (it must allow the `json` format).
 
@@ -290,10 +301,18 @@ Supported platforms: Windows x64/arm64, macOS (Intel/Apple Silicon), Linux x64/a
 | Logs | `docker compose logs -f minicrawl` (or `npm run docker:logs`) |
 | Restart | `docker compose restart minicrawl` |
 | Stop (keep data) | `docker compose down` |
-| Update to the latest code | `git pull && docker compose up -d --build` |
+| Update to the latest release | `git pull && docker compose pull && docker compose up -d` |
+| Update when building from source | `git pull && docker compose up -d --build` |
 | Apply `.env` changes | `docker compose up -d` |
 
-**Data:** crawl results, crawl state and the URL index live in the `minicrawl-data` volume (SQLite at `/data/minicrawl.db`). They survive restarts and updates. Crawl results are kept like Firecrawl's, but nothing deletes old data automatically. To start fresh, remove the volume (see [Uninstalling](#uninstalling)).
+**Data:** crawl results, crawl state and the URL index live in the `minicrawl-data` volume (SQLite at `/data/minicrawl.db`). They survive restarts and updates.
+
+minicrawl cleans up after itself every 10 minutes:
+- Crawl and extract results are deleted once they expire: 24 hours after creation by default, matching the `expiresAt` the API reports. Change it with `DATA_TTL_HOURS`.
+- URLs that `/v1/map` remembers are dropped after 30 days without being seen (`SEEN_URLS_TTL_DAYS`).
+- Crawls that are still running are never removed.
+
+To start completely fresh, remove the volume (see [Uninstalling](#uninstalling)).
 
 **Backup:**
 

@@ -1,4 +1,6 @@
 version: 2
+# Minor and patch updates only. Major versions (zod 4, undici 8, the next
+# Node LTS, ...) can break things and are upgraded deliberately, by hand.
 updates:
   - package-ecosystem: npm
     directory: /
@@ -7,10 +9,19 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # Stay on the Node 24 LTS line: no jumps to Node 25 (short-lived) or 26+.
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
