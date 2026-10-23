@@ -51,6 +51,7 @@ Keys come from `API_KEY` and/or `API_KEYS=key1,key2` in `.env`. A missing or wro
 | POST | `/v1/search` | Web search (optionally scrape the results) | yes |
 | POST | `/v1/extract` | AI extraction across URLs | async: returns an id |
 | GET | `/v1/extract/{id}` | Extraction status and result | yes |
+| POST | `/mcp` | MCP server for AI agents (see [INTEGRATIONS.md](INTEGRATIONS.md#ai-agents-via-mcp)) | yes |
 
 Unknown fields in a body are rejected with `400 "Unrecognized key in body"`, so typos don't fail silently. The SDK fields `origin` and `integration` are accepted and ignored.
 
@@ -432,7 +433,7 @@ Every error has the same shape:
 | 401 | `UNAUTHORIZED` | Missing or wrong API key |
 | 403 | `BLOCKED_URL` | URL resolves to a private/local address (SSRF protection). Set `ALLOW_PRIVATE_URLS=true` only if you trust all callers |
 | 403 | `BLOCKED_BY_SITE` | The site served a bot challenge. Try `proxy: "stealth"` with `STEALTH_PROXY_URLS` |
-| 404 | – | Unknown crawl/extract id |
+| 404 | `NOT_FOUND` | Unknown crawl/extract id |
 | 408 | `SCRAPE_TIMEOUT` | Raise `timeout` |
 | 422 | `UNSUPPORTED_FILE` | File type that can't be converted, or an unreadable file |
 | 422 | `ACTION_FAILED` | An action failed. The message says which one and why |

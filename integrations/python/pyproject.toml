@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "minicrawl-py"
+version = "1.0.0"
+description = "Python client for minicrawl, the self-hosted Firecrawl-compatible scraping API, with LangChain and LlamaIndex integrations"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "AGPL-3.0-only"
+keywords = ["web-scraping", "crawler", "markdown", "llm", "rag", "langchain", "llama-index", "minicrawl"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Intended Audience :: Developers",
+  "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+  "Topic :: Text Processing :: Markup :: Markdown",
+]
+dependencies = ["httpx>=0.25"]
+
+[project.optional-dependencies]
+langchain = ["langchain-core>=0.3"]
+llama-index = ["llama-index-core>=0.12"]
+dev = ["pytest>=8", "langchain-core>=0.3", "llama-index-core>=0.12"]
+
+[project.urls]
+Homepage = "https://github.com/fairoz-539/minicrawl"
+Documentation = "https://github.com/fairoz-539/minicrawl/blob/main/docs/INTEGRATIONS.md"
+Issues = "https://github.com/fairoz-539/minicrawl/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/minicrawl"]

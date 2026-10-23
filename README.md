@@ -17,6 +17,7 @@ It reads web pages, JavaScript apps, PDFs, Office files and images, and runs on 
 [**Quick start**](#-quick-start) ·
 [**Features**](#-features) ·
 [**API reference**](docs/API.md) ·
+[**Integrations**](docs/INTEGRATIONS.md) ·
 [**Self-hosting guide**](docs/SELF_HOSTING.md) ·
 [**Contributing**](CONTRIBUTING.md)
 
@@ -79,6 +80,8 @@ The first build takes a few minutes; later starts take seconds. For servers, HTT
 | 🗺️ **Map** | A site's URLs in seconds, ranked by relevance to a search term |
 | 🔎 **Search** | Web search through a bundled private SearXNG; optionally scrape every result |
 | 🤖 **AI extraction** | Give a JSON Schema and/or a prompt and get structured data back, from one page or a whole site, via Claude structured outputs |
+| 🧠 **MCP for AI agents** | A built-in MCP server (`/mcp`) gives Claude Code, Cursor, VS Code and Claude Desktop scrape, crawl, map, search and extract tools |
+| 🦜 **RAG frameworks** | Python client with a **LangChain** loader and a **LlamaIndex** reader |
 | 🛡️ **Proxies** | Bring-your-own basic and stealth pools; blocked requests retry through stealth automatically |
 | 🔐 **Secure defaults** | Required API keys (several per server), SSRF protection, non-root container, health checks |
 | 🪶 **Lightweight** | One container plus SearXNG, with SQLite storage. No Redis, Postgres or message queue |
@@ -96,7 +99,34 @@ The first build takes a few minutes; later starts take seconds. For servers, HTT
 | `GET` | [`/health`](docs/API.md#health-and-discovery) | Status and which features are enabled |
 | `GET` | `/docs` · `/openapi.json` | Interactive explorer · OpenAPI spec |
 
-Also: `GET /v1/crawl/{id}/errors` and `DELETE /v1/crawl/{id}`. See the **[full API reference](docs/API.md)** for every option, response and error code.
+Also: `GET /v1/crawl/{id}/errors`, `DELETE /v1/crawl/{id}`, and `POST /mcp` for AI agents. See the **[full API reference](docs/API.md)** for every option, response and error code.
+
+## 🤖 Integrations
+
+**Give your AI agent the web.** minicrawl is an MCP server, so you can connect it in one line:
+
+```bash
+# Claude Code
+claude mcp add --transport http minicrawl http://localhost:3002/mcp --header "Authorization: Bearer $API_KEY"
+```
+
+```jsonc
+// Cursor: ~/.cursor/mcp.json
+{ "mcpServers": { "minicrawl": { "url": "http://localhost:3002/mcp", "headers": { "Authorization": "Bearer YOUR_KEY" } } } }
+
+// Claude Desktop: claude_desktop_config.json (via the minicrawl-mcp bridge)
+{ "mcpServers": { "minicrawl": { "command": "npx", "args": ["-y", "minicrawl-mcp"],
+  "env": { "MINICRAWL_API_URL": "http://localhost:3002", "MINICRAWL_API_KEY": "YOUR_KEY" } } } }
+```
+
+**Feed your RAG pipeline** with LangChain or LlamaIndex:
+
+```python
+from minicrawl.langchain import MinicrawlLoader        # pip install "minicrawl-py[langchain]"
+docs = MinicrawlLoader("https://docs.example.com", mode="crawl", params={"limit": 50}).load()
+```
+
+VS Code, LlamaIndex, Firecrawl SDKs, n8n and more are covered in **[docs/INTEGRATIONS.md](docs/INTEGRATIONS.md)**.
 
 ## 💡 Examples
 
@@ -227,6 +257,8 @@ flowchart LR
 minicrawl/
 ├── src/
 │   ├── server.js        HTTP API, auth, errors, /health
+│   ├── api.js           The operations behind every endpoint (shared by REST and MCP)
+│   ├── mcp.js           MCP server for AI agents (POST /mcp)
 │   ├── schemas.js       Request schemas (validation + OpenAPI source)
 │   ├── openapi.js       /openapi.json and /docs
 │   ├── engines.js       Fetch/browser waterfall and result judging
@@ -242,6 +274,9 @@ minicrawl/
 ├── test/                End-to-end tests (fixture site, mock services)
 ├── docs/                API reference, self-hosting guide
 ├── deploy/searxng/      Bundled SearXNG settings
+├── integrations/
+│   ├── mcp/             minicrawl-mcp: stdio MCP bridge (Claude Desktop)
+│   └── python/          Python client + LangChain loader + LlamaIndex reader
 ├── scripts/             setup.sh / setup.ps1 (generate your .env)
 ├── Dockerfile · docker-compose.yml
 ```

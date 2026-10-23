@@ -30,6 +30,25 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm test
 
+  python:
+    name: Python client + LangChain/LlamaIndex (Python ${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci   # the tests start a real minicrawl server
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e "integrations/python[dev]"
+      - run: pytest -q integrations/python
+
   docker:
     name: Docker image
     runs-on: ubuntu-24.04

@@ -5,32 +5,28 @@
 //   POST   /v1/search
 //   POST   /v1/extract        GET /v1/extract/:id
 import express from "express";
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { openDb, Queue, CrawlStore } from "./db.js";
-import { scrapeURL, DEFAULT_SCRAPE_OPTIONS } from "./scrape.js";
-import { getMapResults } from "./map.js";
 import { startWorkers } from "./worker.js";
-import { sendWebhook } from "./webhook.js";
 import { ActionError, closeBrowser, FatalScrapeError, ScrapeTimeoutError, SiteBlockedError } from "./engines.js";
 import { LLMError } from "./llm.js";
-import { SearchBlockedError, webSearch } from "./search.js";
-import { mapLimit } from "./util.js";
+import { SearchBlockedError } from "./search.js";
 import { UnsupportedFileError } from "./documents.js";
 import { closeOcr, ocrAvailable } from "./ocr.js";
 import { BlockedUrlError } from "./url-guard.js";
-import { crawlBody, extractBody, mapBody, scrapeBody, searchBody } from "./schemas.js";
 import { hasBrowser } from "./browser.js";
 import { proxyPoolSizes } from "./proxy.js";
 import { mountDocs } from "./openapi.js";
+import { mountMcp } from "./mcp.js";
+import * as api from "./api.js";
 import { readFileSync } from "node:fs";
 
 const { version: VERSION } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-const CRAWL_TTL_MS = 24 * 60 * 60 * 1000;
-const PAGE_SIZE = 100;
 
 function errorStatus(err) {
+  if (err instanceof api.NotFoundError) return [404, err.code];
   if (err instanceof LLMError) return [err.status, err.code];
   if (err instanceof ActionError) return [422, err.code];
   if (err instanceof SearchBlockedError) return [503, err.code];
@@ -100,7 +96,7 @@ export function createApp(ctx, { apiKeys = configuredApiKeys() } = {}) {
       endpoints: [
         "GET /health", "GET /docs", "GET /openapi.json",
         "POST /v1/scrape", "POST /v1/crawl", "GET /v1/crawl/{id}", "GET /v1/crawl/{id}/errors", "DELETE /v1/crawl/{id}",
-        "POST /v1/map", "POST /v1/search", "POST /v1/extract", "GET /v1/extract/{id}",
+        "POST /v1/map", "POST /v1/search", "POST /v1/extract", "GET /v1/extract/{id}", "POST /mcp",
       ],
     }),
   );
@@ -124,129 +120,38 @@ export function createApp(ctx, { apiKeys = configuredApiKeys() } = {}) {
 
   mountDocs(app);
 
+  const auth = authMiddleware(apiKeys);
+  mountMcp(app, ctx, { auth, version: VERSION });
+
   const v1 = express.Router();
-  v1.use(authMiddleware(apiKeys));
+  v1.use(auth);
 
-  v1.post("/scrape", async (req, res, next) => {
+  // Thin wrappers over src/api.js (shared with the MCP tools in src/mcp.js).
+  const base = req => `${req.protocol}://${req.get("host")}`;
+  const handle = fn => async (req, res, next) => {
     try {
-      const { url, origin: _o, integration: _i, ...opts } = scrapeBody.parse(req.body);
-      const { doc } = await scrapeURL(url, opts, ctx.scrapeConfig);
-      ctx.store.recordSeen(doc.metadata.url, doc.metadata.title ?? null);
-      res.json({ success: true, data: doc });
+      res.json(await fn(req));
     } catch (err) {
       next(err);
     }
-  });
-
-  v1.post("/crawl", (req, res, next) => {
-    try {
-      const { url, scrapeOptions: so, webhook: hook, origin: _o, integration: _i, ...crawlerOptions } = crawlBody.parse(req.body);
-      const id = randomUUID();
-      const sc = { url, crawlerOptions, scrapeOptions: { ...DEFAULT_SCRAPE_OPTIONS, ...so }, webhook: hook };
-      ctx.store.create(id, sc);
-      ctx.queue.add({ type: "kickoff", groupId: id, priority: 5, data: { crawlId: id } });
-      sendWebhook(hook, "crawl.started", id, []);
-      res.json({ success: true, id, url: `${req.protocol}://${req.get("host")}/v1/crawl/${id}` });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  v1.get("/crawl/:id", (req, res) => {
-    const crawl = ctx.store.get(req.params.id);
-    if (!crawl) return res.status(404).json({ success: false, error: "Crawl not found" });
-    const skip = Math.max(0, parseInt(req.query.skip ?? "0", 10) || 0);
-    const counts = ctx.queue.groupCounts(crawl.id);
-    const data = ctx.queue.groupDocuments(crawl.id, skip, PAGE_SIZE);
-    const total = counts.queued + counts.active + counts.completed + counts.failed;
-    const more = data.length === PAGE_SIZE;
-    res.json({
-      success: true,
-      status: crawl.status,
-      total,
-      completed: counts.completed,
-      creditsUsed: counts.completed,
-      expiresAt: new Date(crawl.created_at + CRAWL_TTL_MS).toISOString(),
-      // Omitted (not null) on the last page: the Firecrawl SDKs keep paging
-      // while the key exists.
-      ...(more ? { next: `${req.protocol}://${req.get("host")}/v1/crawl/${crawl.id}?skip=${skip + PAGE_SIZE}` } : {}),
-      data,
-    });
-  });
-
-  const crawlErrors = (req, res) => {
-    const crawl = ctx.store.get(req.params.id);
-    if (!crawl) return res.status(404).json({ success: false, error: "Crawl not found" });
-    res.json({ errors: ctx.queue.groupErrors(crawl.id), robotsBlocked: ctx.store.robotsBlocked(crawl.id) });
   };
-  v1.get("/crawl/:id/errors", crawlErrors);
+
+  v1.post("/scrape", handle(req => api.scrape(ctx, req.body)));
+  v1.post("/crawl", handle(req => api.startCrawl(ctx, req.body, base(req))));
+  v1.get(
+    "/crawl/:id",
+    handle(req =>
+      api.crawlStatus(ctx, req.params.id, { skip: Math.max(0, parseInt(req.query.skip ?? "0", 10) || 0), baseUrl: base(req) }),
+    ),
+  );
+  v1.get("/crawl/:id/errors", handle(req => api.crawlErrors(ctx, req.params.id)));
   // The Firecrawl JS SDK's v1 checkCrawlErrors() sends DELETE; it only reads.
-  v1.delete("/crawl/:id/errors", crawlErrors);
-
-  v1.delete("/crawl/:id", (req, res) => {
-    const crawl = ctx.store.get(req.params.id);
-    if (!crawl) return res.status(404).json({ success: false, error: "Crawl not found" });
-    if (ctx.store.setStatus(crawl.id, "cancelled")) ctx.queue.dropQueued(crawl.id);
-    res.json({ success: true, status: "cancelled" });
-  });
-
-  v1.post("/map", async (req, res, next) => {
-    try {
-      const { url, origin: _o, integration: _i, ...opts } = mapBody.parse(req.body);
-      const links = await getMapResults(ctx.store, url, opts);
-      res.json({ success: true, links });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  v1.post("/search", async (req, res, next) => {
-    try {
-      const { query, scrapeOptions: so, origin: _o, integration: _i, ...opts } = searchBody.parse(req.body);
-      const results = await webSearch(query, opts);
-      if (!so) return res.json({ success: true, data: results });
-      // Scrape every result, as Firecrawl does when scrapeOptions is given.
-      const data = await mapLimit(results, 4, async r => {
-        try {
-          const { doc } = await scrapeURL(r.url, so, ctx.scrapeConfig);
-          ctx.store.recordSeen(doc.metadata.url, doc.metadata.title ?? null);
-          return { ...r, ...doc };
-        } catch (err) {
-          return { ...r, metadata: { sourceURL: r.url, error: err.message } };
-        }
-      });
-      res.json({ success: true, data });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  v1.post("/extract", (req, res, next) => {
-    try {
-      const { origin: _o, integration: _i, ...body } = extractBody.parse(req.body);
-      const id = ctx.queue.add({ type: "extract", priority: 10, data: body });
-      res.json({ success: true, id, urlTrace: [] });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  v1.get("/extract/:id", (req, res) => {
-    const job = ctx.queue.get(req.params.id);
-    if (!job || job.type !== "extract") return res.status(404).json({ success: false, error: "Extract job not found" });
-    const status = { queued: "processing", active: "processing", completed: "completed", failed: "failed" }[job.status];
-    const r = job.result ?? {};
-    res.json({
-      success: job.status !== "failed",
-      status,
-      data: r.data ?? null,
-      ...(job.data.showSources ? { sources: r.sources ?? [] } : {}),
-      ...(r.warnings?.length ? { warning: r.warnings.join(" ") } : {}),
-      ...(r.failed?.length ? { failedUrls: r.failed } : {}),
-      ...(job.error ? { error: job.error } : {}),
-      expiresAt: new Date(Math.floor(job.created_at / 1000) + CRAWL_TTL_MS).toISOString(),
-    });
-  });
+  v1.delete("/crawl/:id/errors", handle(req => api.crawlErrors(ctx, req.params.id)));
+  v1.delete("/crawl/:id", handle(req => api.cancelCrawl(ctx, req.params.id)));
+  v1.post("/map", handle(req => api.map(ctx, req.body)));
+  v1.post("/search", handle(req => api.search(ctx, req.body)));
+  v1.post("/extract", handle(req => api.startExtract(ctx, req.body)));
+  v1.get("/extract/:id", handle(req => api.extractStatus(ctx, req.params.id)));
 
   app.use("/v1", v1);
   app.use((_req, res) => res.status(404).json({ success: false, error: "Not found" }));

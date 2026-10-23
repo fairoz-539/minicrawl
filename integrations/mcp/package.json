@@ -1,0 +1,17 @@
+{
+  "name": "minicrawl-mcp",
+  "version": "1.0.1",
+  "description": "MCP server for minicrawl: give Claude Desktop, Cursor and other AI agents self-hosted web scraping, crawling, search and AI extraction",
+  "keywords": ["mcp", "model-context-protocol", "minicrawl", "web-scraping", "crawler", "claude", "cursor", "ai-agents"],
+  "homepage": "https://github.com/fairoz-539/minicrawl/tree/main/integrations/mcp#readme",
+  "bugs": { "url": "https://github.com/fairoz-539/minicrawl/issues" },
+  "repository": { "type": "git", "url": "git+https://github.com/fairoz-539/minicrawl.git", "directory": "integrations/mcp" },
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "bin": { "minicrawl-mcp": "index.js" },
+  "files": ["index.js", "README.md", "LICENSE"],
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2"
+  }
+}

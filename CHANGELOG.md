@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- **MCP server** built in at `POST /mcp` (Streamable HTTP, stateless, API-key protected), with tools `minicrawl_scrape`, `minicrawl_map`, `minicrawl_search`, `minicrawl_crawl`, `minicrawl_crawl_status`, `minicrawl_extract` and `minicrawl_extract_status`. Works with Claude Code, Cursor and VS Code.
+- **`minicrawl-mcp`** (`integrations/mcp`): a stdio bridge to `/mcp` for Claude Desktop and other local-only MCP clients.
+- **Python package `minicrawl-py`** (`integrations/python`, imports as `minicrawl`): client plus a LangChain `MinicrawlLoader` and a LlamaIndex `MinicrawlReader`.
+- **`minicrawl-mcp` on npm** (1.0.0); 1.0.1 adds the license file to the package.
+- `docs/INTEGRATIONS.md`: MCP clients, LangChain, LlamaIndex, Firecrawl SDKs, n8n/HTTP tools.
+
+### Changed
+
+- REST routes and MCP tools share one implementation (`src/api.js`). Unknown crawl/extract ids now return `code: "NOT_FOUND"`.
+
 ## [1.0.0] - 2026-10-24
 
 First public release.

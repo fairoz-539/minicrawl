@@ -3,3 +3,10 @@ node_modules/
 *.db-wal
 *.db-shm
 .env
+
+# Python
+__pycache__/
+*.egg-info/
+.pytest_cache/
+build/
+dist/

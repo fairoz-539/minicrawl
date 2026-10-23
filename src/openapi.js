@@ -158,6 +158,18 @@ export function buildSpec() {
           },
         },
       },
+      "/mcp": {
+        post: {
+          tags: ["System"],
+          summary: "MCP endpoint for AI agents",
+          description:
+            "Model Context Protocol server (Streamable HTTP, stateless) exposing minicrawl_scrape, minicrawl_map, " +
+            "minicrawl_search, minicrawl_crawl, minicrawl_crawl_status, minicrawl_extract and minicrawl_extract_status. " +
+            "Connect an MCP client (Claude Code, Cursor, VS Code) instead of calling it by hand. See docs/INTEGRATIONS.md.",
+          requestBody: { required: true, content: json({ type: "object", description: "JSON-RPC 2.0 message" }) },
+          responses: { 200: { description: "JSON-RPC response" }, ...ERRORS },
+        },
+      },
       "/v1/scrape": {
         post: {
           tags: ["Scrape"],
