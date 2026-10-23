@@ -2,7 +2,7 @@
 # Node 24 (for node:sqlite) on Debian 13 trixie (glibc 2.41: light-ocr needs 2.38+, and
 # the canvas build needs glibc too), with Playwright's Chromium.
 # Works on linux/amd64 and linux/arm64.
-FROM node:24-trixie-slim
+FROM node:25-trixie-slim
 
 ENV NODE_ENV=production \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
