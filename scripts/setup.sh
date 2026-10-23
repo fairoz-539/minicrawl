@@ -34,4 +34,4 @@ echo "Created .env with a new API key. Use it as:  Authorization: Bearer <key>"
 echo "Your API key: ${api_key}"
 echo "(It is stored only in .env on this machine.)"
 echo
-echo "Next:  docker compose up -d --build"
+echo "Next:  docker compose pull && docker compose up -d     (or: docker compose up -d --build, to build from source)"

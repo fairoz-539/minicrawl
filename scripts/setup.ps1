@@ -42,4 +42,4 @@ Write-Host "Created .env with a new API key. Use it as:  Authorization: Bearer <
 Write-Host "Your API key: $apiKey"
 Write-Host "(It is stored only in .env on this machine.)"
 Write-Host ""
-Write-Host "Next:  docker compose up -d --build"
+Write-Host "Next:  docker compose pull; docker compose up -d     (or: docker compose up -d --build, to build from source)"
