@@ -120,6 +120,16 @@ export async function startFixtureSite() {
     if (pathname === "/searx/search") {
       res.writeHead(200, { "content-type": "application/json" });
       const page = Number(searchParams.get("pageno"));
+      const category = searchParams.get("categories");
+      if (category === "news" || category === "images") {
+        const results =
+          page !== 1
+            ? []
+            : category === "news"
+              ? [{ url: `${origin}/docs/a`, title: "News A", content: "Fresh news", publishedDate: "2026-10-01T00:00:00Z", thumbnail: `${origin}/image.png` }]
+              : [{ url: `${origin}/about`, title: "Image A", img_src: `${origin}/image.png`, resolution: "640x480" }];
+        return res.end(JSON.stringify({ results }));
+      }
       return res.end(
         JSON.stringify({
           results:

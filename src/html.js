@@ -132,3 +132,38 @@ export function extractLinks(html, pageUrl) {
   });
   return [...out];
 }
+
+/** Absolute URLs of the page's images (img src/srcset, og:image), deduplicated. */
+export function extractImages(html, pageUrl) {
+  const $ = cheerio.load(html);
+  const baseUrl = resolveBaseUrl($, pageUrl);
+  const out = new Set();
+  const add = src => {
+    if (!src || /^data:/i.test(src)) return;
+    try {
+      const u = new URL(src.trim(), baseUrl);
+      if (u.protocol === "http:" || u.protocol === "https:") out.add(u.href);
+    } catch {}
+  };
+  $("img").each((_, el) => {
+    add($(el).attr("src"));
+    for (const part of ($(el).attr("srcset") ?? "").split(",")) add(part.trim().split(/\s+/)[0]);
+  });
+  add($('meta[property="og:image"]').attr("content"));
+  return [...out];
+}
+
+/** The `attributes` format: values of an attribute on every element matching a selector. */
+export function extractAttributes(html, selectors) {
+  const $ = cheerio.load(html);
+  return selectors.map(({ selector, attribute }) => {
+    let values = [];
+    try {
+      values = $(selector)
+        .toArray()
+        .map(el => $(el).attr(attribute))
+        .filter(v => v != null);
+    } catch {} // invalid selector: no values
+    return { selector, attribute, values };
+  });
+}

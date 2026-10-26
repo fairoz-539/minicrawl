@@ -84,6 +84,10 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: pip install -e "integrations/python[dev]"
       - run: pytest -q integrations/python
+      # Contract tests: the official firecrawl-py SDK (v2 client) against minicrawl.
+      # The JS SDK's contract tests (test/sdk.test.js) run with npm test.
+      - run: pip install "firecrawl-py==4.54.0"
+      - run: pytest -q test/contract-py -W ignore::DeprecationWarning
 
   docker:
     name: Docker image

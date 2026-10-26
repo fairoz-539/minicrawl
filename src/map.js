@@ -46,8 +46,9 @@ export function rankLinks(links, search, titles = new Map()) {
     .map(x => x.url);
 }
 
+/** @param {{details?: boolean}} opts details: return [{url, title}] instead of URLs (titles of pages seen before) */
 export async function getMapResults(store, url, opts = {}) {
-  const { search, limit = 5000, includeSubdomains = true, sitemapOnly = false, ignoreSitemap = false } = opts;
+  const { search, limit = 5000, includeSubdomains = true, sitemapOnly = false, ignoreSitemap = false, details = false } = opts;
   const start = new URL(url);
   const host = bareHost(start.hostname);
   const titles = new Map();
@@ -93,5 +94,6 @@ export async function getMapResults(store, url, opts = {}) {
   }
 
   if (search) links = rankLinks(links, search, titles);
-  return links.slice(0, limit);
+  links = links.slice(0, limit);
+  return details ? links.map(u => ({ url: u, ...(titles.has(u) ? { title: titles.get(u) } : {}) })) : links;
 }

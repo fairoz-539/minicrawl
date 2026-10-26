@@ -20,7 +20,29 @@ const UA =
 const TBS = { "qdr:h": "d", "qdr:d": "d", "qdr:w": "w", "qdr:m": "m", "qdr:y": "y" };
 const SEARX_RANGE = { d: "day", w: "week", m: "month", y: "year" };
 
-async function searxng(query, { limit, lang, tbs, timeout }) {
+/** SearXNG result -> Firecrawl's shape for each source (web, news, images). */
+const SEARX_SHAPE = {
+  web: r => ({ url: r.url, title: r.title ?? "", description: r.content ?? "" }),
+  news: r => ({
+    url: r.url,
+    title: r.title ?? "",
+    snippet: r.content ?? "",
+    ...(r.publishedDate ? { date: r.publishedDate } : {}),
+    ...(r.thumbnail || r.img_src ? { imageUrl: r.thumbnail || r.img_src } : {}),
+  }),
+  images: r => {
+    const [w, h] = String(r.resolution ?? "").split(/\s*[x×]\s*/).map(Number);
+    return {
+      url: r.url,
+      title: r.title ?? "",
+      imageUrl: r.img_src ?? r.thumbnail_src ?? null,
+      ...(w && h ? { imageWidth: w, imageHeight: h } : {}),
+    };
+  },
+};
+const SEARX_CATEGORY = { web: "general", news: "news", images: "images" };
+
+async function searxng(query, { limit, lang, tbs, timeout, source = "web" }) {
   const results = [];
   for (let page = 1; results.length < limit && page <= 5; page++) {
     // Keep any sub-path the instance is mounted under (https://host/searx).
@@ -30,12 +52,13 @@ async function searxng(query, { limit, lang, tbs, timeout }) {
     url.searchParams.set("pageno", String(page));
     if (lang) url.searchParams.set("language", lang);
     if (TBS[tbs]) url.searchParams.set("time_range", SEARX_RANGE[TBS[tbs]]);
-    if (process.env.SEARXNG_ENGINES) url.searchParams.set("engines", process.env.SEARXNG_ENGINES);
+    if (source !== "web") url.searchParams.set("categories", SEARX_CATEGORY[source]);
+    else if (process.env.SEARXNG_ENGINES) url.searchParams.set("engines", process.env.SEARXNG_ENGINES);
     const res = await undiciFetch(url, { signal: AbortSignal.timeout(timeout), headers: { accept: "application/json" } });
     if (!res.ok) throw new Error(`SearXNG returned ${res.status}`);
     const body = await res.json();
     if (!body.results?.length) break;
-    for (const r of body.results) results.push({ url: r.url, title: r.title ?? "", description: r.content ?? "" });
+    for (const r of body.results) results.push(SEARX_SHAPE[source](r));
   }
   return results;
 }
@@ -112,8 +135,15 @@ async function duckduckgo(query, { limit, lang, country, tbs, timeout }) {
   });
 }
 
-export async function webSearch(query, { limit = 5, lang = "en", country = "us", tbs, timeout = 15_000 } = {}) {
+/**
+ * @param {{source?: "web" | "news" | "images"}} opts news and images need
+ *   SEARXNG_ENDPOINT; DuckDuckGo only answers web searches.
+ */
+export async function webSearch(query, { limit = 5, lang = "en", country = "us", tbs, timeout = 15_000, source = "web" } = {}) {
+  if (source !== "web" && !process.env.SEARXNG_ENDPOINT) {
+    throw new SearchBlockedError(`${source} search needs SearXNG: set SEARXNG_ENDPOINT`);
+  }
   const provider = process.env.SEARXNG_ENDPOINT ? searxng : duckduckgo;
-  const results = await provider(query, { limit, lang, country, tbs, timeout });
+  const results = await provider(query, { limit, lang, country, tbs, timeout, source });
   return results.slice(0, limit);
 }

@@ -224,7 +224,7 @@ export function requireFeature(tenant, feature) {
 export function scrapePolicy(tenant, opts = {}) {
   const f = tenant.limits.features ?? {};
   const formats = opts.formats ?? [];
-  if (formats.includes("json") || opts.jsonOptions) requireFeature(tenant, "ai");
+  if (formats.includes("json") || formats.includes("summary") || opts.jsonOptions) requireFeature(tenant, "ai");
   if (formats.some(x => x.startsWith("screenshot")) || opts.actions?.length) requireFeature(tenant, "browser");
   if (opts.proxy === "stealth") requireFeature(tenant, "stealthProxy");
   return { noBrowser: f.browser === false, noStealth: f.stealthProxy === false };

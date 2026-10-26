@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-27
+
+### Added
+
+- **Firecrawl v2 API** (`/v2/*`): scrape, batch scrape, crawl (status, errors, cancel, active), map, search, extract, and team usage (`credit-usage`, `token-usage`, `…/historical`, `queue-status`, `concurrency-check`).
+  - **What works:** the official SDKs' **default clients**, `Firecrawl` in `@mendable/firecrawl-js` and in `firecrawl-py`.
+  - **Rules:** the same tenancy rules, quotas and metering as `/v1`.
+  - **Refused, not ignored:** formats minicrawl can't produce (changeTracking, branding, …) and `crawl.prompt` answer `400`.
+- **Batch scrape** (`/v1/batch/scrape` and `/v2/batch/scrape`): many URLs on the crawl queue.
+  - Status, errors and cancel work as for crawls.
+  - `ignoreInvalidURLs` and `invalidURLs`.
+  - `appendToId` adds URLs to an existing batch.
+  - `batch_scrape.*` webhooks.
+- **New formats:** `images`, `summary` (AI) and `attributes` (CSS selector + attribute values), in v1 and v2.
+- **Search sources and filters:** `news` and `images` sources (with SearXNG), `includeDomains` / `excludeDomains`, and `github` / `research` / `pdf` categories.
+- **Map titles:** `/v2/map` returns `{url, title}` links.
+- **Crawl `delay`:** seconds to wait before each page, in v1 and v2.
+- **Extract without URLs:** the prompt is searched on the web.
+- **Per-request zero data retention:** `zeroDataRetention: true` on v2 requests.
+- **Contract tests in CI** with the official `@mendable/firecrawl-js` (v2 and v1 clients) and `firecrawl-py` SDKs.
+
+### Fixed
+
+- A crawl could be reported `completed` with no pages if the finish check ran in the instant between creating it and queuing its first job. New crawls now get a one-second grace period.
+
 ## [1.3.0] - 2026-10-27
 
 ### Added

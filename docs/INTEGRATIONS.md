@@ -142,14 +142,19 @@ Full reference: [integrations/python/README.md](../integrations/python/README.md
 
 ## Firecrawl SDKs
 
-minicrawl implements Firecrawl's v1 API, so the official JavaScript SDK's v1 client works when you point it at your server:
+minicrawl implements Firecrawl's v1 and v2 APIs, so the official SDKs work when you point them at your server. That includes their default clients:
 
 ```js
-import { FirecrawlAppV1 } from "@mendable/firecrawl-js";
-const app = new FirecrawlAppV1({ apiKey: "YOUR_KEY", apiUrl: "http://localhost:3002" });
+import Firecrawl from "@mendable/firecrawl-js";
+const fc = new Firecrawl({ apiKey: "YOUR_KEY", apiUrl: "http://localhost:3002" });
 ```
 
-The tested methods are listed in [SELF_HOSTING.md](SELF_HOSTING.md#sdk-compatibility). Tools that let you set a "Firecrawl API URL" for v1 can usually point at minicrawl too.
+```python
+from firecrawl import Firecrawl
+fc = Firecrawl(api_key="YOUR_KEY", api_url="http://localhost:3002")
+```
+
+The tested methods are listed in [SELF_HOSTING.md](SELF_HOSTING.md#sdk-compatibility). Tools and frameworks that let you set a "Firecrawl API URL" can point at minicrawl too: LangChain's and LlamaIndex's Firecrawl loaders, Dify, Flowise and n8n's Firecrawl node.
 
 ---
 

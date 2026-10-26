@@ -1,7 +1,7 @@
 // scrapeURL: engine waterfall (with proxy escalation), then the transformer
 // pipeline that turns the raw page into a Firecrawl-shaped Document.
 import { FatalScrapeError, SiteBlockedError, scrapeWithWaterfall } from "./engines.js";
-import { cleanHtml, extractLinks, extractMetadata } from "./html.js";
+import { cleanHtml, extractAttributes, extractImages, extractLinks, extractMetadata } from "./html.js";
 import { htmlToMarkdown } from "./markdown.js";
 import { hasStealthPool, pickProxy } from "./proxy.js";
 import { extractJson } from "./llm.js";
@@ -22,6 +22,12 @@ export const llmTokens = (usage = []) => ({
   aiInputTokens: usage.reduce((n, u) => n + (u?.inputTokens ?? 0), 0),
   aiOutputTokens: usage.reduce((n, u) => n + (u?.outputTokens ?? 0), 0),
 });
+
+/** The `summary` format: a short AI summary of the page. */
+const SUMMARY_REQUEST = {
+  schema: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"], additionalProperties: false },
+  prompt: "Summarize this page in 2 to 4 sentences: what it is and its key information.",
+};
 
 const BLOCKED_STATUSES = new Set([401, 403, 407, 429, 503]);
 
@@ -84,6 +90,8 @@ export async function scrapeURL(url, options = {}, { staggerMs, noBrowser = fals
   if (formats.has("html")) doc.html = cleaned ?? undefined;
   if (formats.has("rawHtml")) doc.rawHtml = page.html ?? undefined;
   if (formats.has("links")) doc.links = page.kind === "html" ? extractLinks(page.html, page.url) : [];
+  if (formats.has("images")) doc.images = page.kind === "html" ? extractImages(page.html, page.url) : [];
+  if (formats.has("attributes")) doc.attributes = page.kind === "html" ? extractAttributes(page.html, opts.attributes ?? []) : [];
   if (screenshot) doc.screenshot = page.screenshot;
   if (page.actions) doc.actions = page.actions;
 
@@ -110,14 +118,22 @@ export async function scrapeURL(url, options = {}, { staggerMs, noBrowser = fals
     browserPages: page.engine === "browser" ? 1 : 0,
     ocrPages: doc.metadata.ocr ? doc.metadata.ocrPagesProcessed ?? doc.metadata.numPages ?? 1 : 0,
   };
+  const addTokens = llm => {
+    const t = llmTokens(llm);
+    usage.aiInputTokens = (usage.aiInputTokens ?? 0) + t.aiInputTokens;
+    usage.aiOutputTokens = (usage.aiOutputTokens ?? 0) + t.aiOutputTokens;
+  };
+  const pageForLlm = [{ url: page.url, title: doc.metadata.title, markdown }];
   if (formats.has("json")) {
-    const { data, warnings: w, usage: llm } = await extractJson(
-      [{ url: page.url, title: doc.metadata.title, markdown }],
-      opts.jsonOptions ?? {},
-    );
+    const { data, warnings: w, usage: llm } = await extractJson(pageForLlm, opts.jsonOptions ?? {});
     doc.json = data;
     warnings.push(...w);
-    Object.assign(usage, llmTokens(llm));
+    addTokens(llm);
+  }
+  if (formats.has("summary")) {
+    const { data, usage: llm } = await extractJson(pageForLlm, SUMMARY_REQUEST);
+    doc.summary = data?.summary ?? "";
+    addTokens(llm);
   }
   if (warnings.length) doc.warning = warnings.join(" ");
 

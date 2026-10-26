@@ -78,10 +78,17 @@ export const jsonOptions = z
 export const scrapeOptions = z
   .object({
     formats: z
-      .array(z.enum(["markdown", "html", "rawHtml", "links", "screenshot", "screenshot@fullPage", "json"]))
+      .array(
+        z.enum(["markdown", "html", "rawHtml", "links", "images", "screenshot", "screenshot@fullPage", "json", "summary", "attributes"]),
+      )
       .default(["markdown"])
-      .describe("What to return. json needs jsonOptions and ANTHROPIC_API_KEY"),
+      .describe("What to return. json and summary need ANTHROPIC_API_KEY; json needs jsonOptions, attributes needs attributes"),
     jsonOptions: jsonOptions.optional(),
+    attributes: z
+      .array(z.object({ selector: z.string().min(1), attribute: z.string().min(1) }).strict())
+      .max(50)
+      .optional()
+      .describe("For the attributes format: CSS selector and attribute name pairs"),
     actions: z.array(action).max(50).optional().describe("Browser actions (forces the browser engine)"),
     proxy: z
       .enum(["auto", "basic", "stealth"])
@@ -99,6 +106,9 @@ export const scrapeOptions = z
   .strict();
 
 export function checkScrapeOptions(o, ctx, path = []) {
+  if (o.formats?.includes("attributes") && !o.attributes?.length) {
+    ctx.addIssue({ code: "custom", path: [...path, "attributes"], message: "The attributes format needs attributes: [{selector, attribute}]" });
+  }
   if (o.formats?.includes("json") && !o.jsonOptions?.schema && !o.jsonOptions?.prompt) {
     ctx.addIssue({ code: "custom", path: [...path, "jsonOptions"], message: "The json format needs jsonOptions.schema or jsonOptions.prompt" });
   }
@@ -143,6 +153,7 @@ export const crawlBody = z
     ignoreSitemap: z.boolean().default(false),
     ignoreQueryParameters: z.boolean().default(false).describe("Treat ?a=1 and ?a=2 as the same page"),
     deduplicateSimilarURLs: z.boolean().default(true).describe("Treat www/http(s)/index.html/trailing-slash variants as one page"),
+    delay: z.number().min(0).max(60).optional().describe("Seconds to wait before each page (politeness)"),
     scrapeOptions: scrapeOptions.default({}),
     webhook: webhook.optional(),
     ...clientMeta,
@@ -160,6 +171,19 @@ export const crawlBody = z
       }
     }
   });
+
+export const batchBody = scrapeOptions
+  .extend({
+    urls: z.array(z.string()).min(1).max(10_000).describe("Pages to scrape"),
+    webhook: webhook.optional(),
+    ignoreInvalidURLs: z.boolean().default(false).describe("Skip invalid or blocked URLs (listed in invalidURLs) instead of failing"),
+    appendToId: z.string().uuid().optional().describe("Add these URLs to an existing batch"),
+    maxConcurrency: z.number().int().positive().optional().describe("Accepted for compatibility; the team's concurrency limit applies"),
+    zeroDataRetention: z.boolean().optional().describe("Zero data retention for this batch"),
+    ...clientMeta,
+  })
+  .strict()
+  .superRefine((o, ctx) => checkScrapeOptions(o, ctx));
 
 export const mapBody = z
   .object({
@@ -192,8 +216,8 @@ export const extractBody = z
   .object({
     urls: z
       .array(z.string().trim().transform(withScheme))
-      .min(1)
       .max(10)
+      .default([])
       .refine(
         list =>
           list.every(u => {
@@ -205,7 +229,7 @@ export const extractBody = z
           }),
         "Every URL must be http(s), optionally ending in /*",
       )
-      .describe("Pages to read. https://site.com/* expands to the site's most relevant pages"),
+      .describe("Pages to read. https://site.com/* expands to the site's most relevant pages. Without URLs, the prompt is searched on the web"),
     prompt: z.string().min(1).optional().describe("What to extract"),
     schema: z.record(z.any()).optional().describe("JSON Schema for the result"),
     systemPrompt: z.string().optional(),
@@ -215,4 +239,7 @@ export const extractBody = z
     ...clientMeta,
   })
   .strict()
-  .refine(b => b.prompt || b.schema, "Provide a prompt, a schema, or both");
+  .refine(b => b.prompt || b.schema, "Provide a prompt, a schema, or both")
+  .refine(b => b.urls.length || b.prompt, "Provide urls, or a prompt to search the web with")
+  // No URLs: find the pages with a web search for the prompt.
+  .transform(b => (b.urls.length ? b : { ...b, enableWebSearch: true }));

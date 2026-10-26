@@ -1,11 +1,11 @@
-// Best-effort crawl webhooks (crawl.started / crawl.page / crawl.completed /
-// crawl.failed), same payload shape as Firecrawl v1.
+// Best-effort webhooks for crawls (crawl.started / crawl.page / crawl.completed)
+// and batch scrapes (batch_scrape.*), same payload shape as Firecrawl.
 import { assertPublicUrl } from "./url-guard.js";
 
 export function sendWebhook(webhook, type, id, data) {
   if (!webhook) return;
   const cfg = typeof webhook === "string" ? { url: webhook } : webhook;
-  if (cfg.events && !cfg.events.includes(type.replace(/^crawl\./, ""))) return;
+  if (cfg.events && !cfg.events.includes(type.replace(/^(crawl|batch_scrape)\./, ""))) return;
 
   (async () => {
     await assertPublicUrl(cfg.url);

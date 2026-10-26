@@ -10,7 +10,7 @@
 import pg from "pg";
 import { randomUUID } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
-import { CLAIM_SKIP_FULL_TEAMS } from "./db.js";
+import { CLAIM_SKIP_FULL_TEAMS, IDLE_GRACE_MS } from "./db.js";
 import { TenancyStore } from "./tenancy-store.js";
 
 const MIGRATIONS_DIR = new URL("../migrations/postgres/", import.meta.url);
@@ -165,6 +165,17 @@ class PgQueue {
   async dropQueued(groupId) {
     return (await this.pool.query("DELETE FROM jobs WHERE group_id = $1 AND status = 'queued'", [groupId])).rowCount;
   }
+
+  async teamStats(teamId) {
+    const counts = { queued: 0, active: 0 };
+    const { rows } = await this.pool.query(
+      "SELECT status, COUNT(*) AS n FROM jobs WHERE team_id = $1 AND status IN ('queued', 'active') GROUP BY status",
+      [teamId],
+    );
+    for (const { status, n } of rows) counts[status] = n;
+    const last = await this.pool.query("SELECT MAX(finished_at) AS at FROM jobs WHERE team_id = $1 AND status = 'completed'", [teamId]);
+    return { ...counts, lastSuccessAt: last.rows[0].at ?? null };
+  }
 }
 
 class PgCrawlStore {
@@ -200,15 +211,28 @@ class PgCrawlStore {
   }
 
   /** Crawls with no queued/active jobs left. Each id is returned to exactly one caller. */
-  async finishIdleCrawls() {
+  async finishIdleCrawls(now = Date.now()) {
     const { rows } = await this.pool.query(
       `UPDATE crawls SET status = 'completed', finished_at = $1
-       WHERE status = 'scraping' AND NOT EXISTS (
+       WHERE status = 'scraping' AND created_at < $2 AND NOT EXISTS (
          SELECT 1 FROM jobs WHERE jobs.group_id = crawls.id AND jobs.status IN ('queued', 'active'))
        RETURNING id`,
-      [Date.now()],
+      [now, now - IDLE_GRACE_MS],
     );
     return rows.map(r => r.id);
+  }
+
+  async reopen(id) {
+    const { rowCount } = await this.pool.query(
+      "UPDATE crawls SET status = 'scraping', finished_at = NULL WHERE id = $1 AND status = 'completed'",
+      [id],
+    );
+    return rowCount > 0;
+  }
+
+  async listActive(teamId) {
+    const { rows } = await this.pool.query("SELECT * FROM crawls WHERE team_id = $1 AND status = 'scraping' ORDER BY created_at", [teamId]);
+    return rows.map(r => ({ ...r, data: parse(r.data) }));
   }
 
   async lockURL(crawlId, url, limit) {

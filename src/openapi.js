@@ -6,7 +6,8 @@ import express from "express";
 import { readFileSync } from "node:fs";
 import swaggerUi from "swagger-ui-dist";
 import { zodToJsonSchema } from "zod-to-json-schema";
-import { crawlBody, extractBody, mapBody, scrapeBody, searchBody } from "./schemas.js";
+import { batchBody, crawlBody, extractBody, mapBody, scrapeBody, searchBody } from "./schemas.js";
+import { batchBodyV2, crawlBodyV2, extractBodyV2, mapBodyV2, scrapeBodyV2, searchBodyV2 } from "./v2.js";
 import { keyCreateBody, orgUpdateBody, teamCreateBody, teamUpdateBody } from "./admin.js";
 
 const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -58,6 +59,7 @@ const scrapeErrors = {
 };
 const notFound = { 404: { description: "Unknown id", content: json(ref("Error")) } };
 const idParam = { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } };
+const skipParam = { name: "skip", in: "query", schema: { type: "integer", minimum: 0 }, description: "Pages to skip (paging; see next)" };
 const teamIdParam = { name: "id", in: "path", required: true, schema: { type: "string" }, description: "Team id (\"default\" for the default team)" };
 
 const documentSchema = {
@@ -137,6 +139,13 @@ export function buildSpec() {
         MapRequest: fromZod(mapBody),
         SearchRequest: fromZod(searchBody),
         ExtractRequest: fromZod(extractBody),
+        BatchScrapeRequest: fromZod(batchBody),
+        ScrapeRequestV2: fromZod(scrapeBodyV2),
+        BatchScrapeRequestV2: fromZod(batchBodyV2),
+        CrawlRequestV2: fromZod(crawlBodyV2),
+        MapRequestV2: fromZod(mapBodyV2),
+        SearchRequestV2: fromZod(searchBodyV2),
+        ExtractRequestV2: fromZod(extractBodyV2),
         TeamCreate: fromZod(teamCreateBody),
         TeamUpdate: fromZod(teamUpdateBody),
         OrgUpdate: fromZod(orgUpdateBody),
@@ -160,6 +169,8 @@ export function buildSpec() {
       { name: "Map", description: "List a site's URLs" },
       { name: "Search", description: "Web search via SearXNG" },
       { name: "Extract", description: "AI extraction with Claude (needs ANTHROPIC_API_KEY)" },
+      { name: "Batch", description: "Many URLs at once, asynchronously" },
+      { name: "v2", description: "Firecrawl v2 API: the shapes of the current Firecrawl SDKs (Firecrawl / firecrawl-py v2 clients)" },
       { name: "System" },
       { name: "Admin", description: "Teams, API keys, limits, usage and the audit log (see docs/ADMIN.md)" },
     ],
@@ -353,6 +364,113 @@ export function buildSpec() {
           },
         },
       },
+      "/v1/batch/scrape": {
+        post: {
+          tags: ["Batch"],
+          summary: "Scrape a list of URLs (async)",
+          description: "Scrape options are top-level, as in /v1/scrape. Returns an id; check it with GET /v1/batch/scrape/{id}.",
+          requestBody: body("BatchScrapeRequest", { urls: ["https://example.com", "https://example.org"], formats: ["markdown"] }),
+          responses: { 200: ok("Started", { type: "object" }, { success: true, id: "…", url: "http://localhost:3002/v1/batch/scrape/…" }), ...ERRORS },
+        },
+      },
+      "/v1/batch/scrape/{id}": {
+        get: { tags: ["Batch"], summary: "Batch status and pages (same shape as crawl status)", parameters: [idParam, skipParam], responses: { 200: ok("Status", { type: "object" }), ...ERRORS, ...notFound } },
+        delete: { tags: ["Batch"], summary: "Cancel a batch", parameters: [idParam], responses: { 200: ok("Cancelled", { type: "object" }), ...ERRORS, ...notFound } },
+      },
+      "/v1/batch/scrape/{id}/errors": {
+        get: { tags: ["Batch"], summary: "Failed pages", parameters: [idParam], responses: { 200: ok("Errors", { type: "object" }), ...ERRORS, ...notFound } },
+      },
+      "/v2/scrape": {
+        post: {
+          tags: ["v2"],
+          summary: "Scrape a URL (v2)",
+          description: "Formats are strings or objects: markdown, html, rawHtml, links, images, summary, {type: json, schema, prompt}, {type: screenshot, fullPage}, {type: attributes, selectors}.",
+          requestBody: body("ScrapeRequestV2", { url: "https://example.com", formats: ["markdown", { type: "json", prompt: "the page title" }] }),
+          responses: { 200: ok("Document", { type: "object", properties: { success: { type: "boolean" }, data: ref("Document") } }), ...scrapeErrors },
+        },
+      },
+      "/v2/batch/scrape": {
+        post: {
+          tags: ["v2"],
+          summary: "Batch scrape (v2)",
+          requestBody: body("BatchScrapeRequestV2", { urls: ["https://example.com", "https://example.org"], formats: ["markdown"] }),
+          responses: { 200: ok("Started", { type: "object" }, { success: true, id: "…", url: "…", invalidURLs: [] }), ...ERRORS },
+        },
+      },
+      "/v2/batch/scrape/{id}": {
+        get: { tags: ["v2"], summary: "Batch status and pages", parameters: [idParam, skipParam], responses: { 200: ok("Status", { type: "object" }), ...ERRORS, ...notFound } },
+        delete: { tags: ["v2"], summary: "Cancel a batch", parameters: [idParam], responses: { 200: ok("Cancelled", { type: "object" }), ...ERRORS, ...notFound } },
+      },
+      "/v2/batch/scrape/{id}/errors": {
+        get: { tags: ["v2"], summary: "Failed pages of a batch", parameters: [idParam], responses: { 200: ok("Errors", { type: "object" }), ...ERRORS, ...notFound } },
+      },
+      "/v2/crawl": {
+        post: {
+          tags: ["v2"],
+          summary: "Crawl a site (v2)",
+          description: "sitemap: include (default), skip, or only. maxDiscoveryDepth bounds link hops; delay waits between pages.",
+          requestBody: body("CrawlRequestV2", { url: "https://example.com", limit: 50, sitemap: "include", scrapeOptions: { formats: ["markdown"] } }),
+          responses: { 200: ok("Started", { type: "object" }, { success: true, id: "…", url: "…" }), ...ERRORS },
+        },
+      },
+      "/v2/crawl/active": {
+        get: { tags: ["v2"], summary: "Your team's running crawls", responses: { 200: ok("Crawls", { type: "object" }), ...ERRORS } },
+      },
+      "/v2/crawl/ongoing": {
+        get: { tags: ["v2"], summary: "Same as /v2/crawl/active", responses: { 200: ok("Crawls", { type: "object" }), ...ERRORS } },
+      },
+      "/v2/crawl/{id}": {
+        get: { tags: ["v2"], summary: "Crawl status and pages", parameters: [idParam, skipParam], responses: { 200: ok("Status", { type: "object" }), ...ERRORS, ...notFound } },
+        delete: {
+          tags: ["v2"],
+          summary: "Cancel a crawl",
+          parameters: [idParam],
+          responses: { 200: ok("Cancelled", { type: "object" }), 409: { description: "The crawl already finished", content: json(ref("Error")) }, ...ERRORS, ...notFound },
+        },
+      },
+      "/v2/crawl/{id}/errors": {
+        get: { tags: ["v2"], summary: "Failed pages and robots.txt-blocked URLs", parameters: [idParam], responses: { 200: ok("Errors", { type: "object" }), ...ERRORS, ...notFound } },
+      },
+      "/v2/map": {
+        post: {
+          tags: ["v2"],
+          summary: "List a site's URLs (v2: links are {url, title} objects)",
+          requestBody: body("MapRequestV2", { url: "https://example.com", sitemap: "include", limit: 100 }),
+          responses: { 200: ok("Links", { type: "object" }, { success: true, links: [{ url: "https://example.com/about", title: "About" }] }), ...ERRORS },
+        },
+      },
+      "/v2/search": {
+        post: {
+          tags: ["v2"],
+          summary: "Search web, news and images (v2)",
+          description: "sources: web, news, images (news and images need SearXNG). categories: github, research, pdf. Results are grouped by source.",
+          requestBody: body("SearchRequestV2", { query: "firecrawl alternatives", sources: ["web", "news"], limit: 5 }),
+          responses: { 200: ok("Results", { type: "object" }, { success: true, data: { web: [{ url: "…", title: "…", description: "…", position: 1 }] } }), ...ERRORS },
+        },
+      },
+      "/v2/extract": {
+        post: {
+          tags: ["v2"],
+          summary: "AI extraction (v2). Without urls, the prompt is searched on the web",
+          requestBody: body("ExtractRequestV2", { urls: ["https://example.com/*"], prompt: "Company name and pricing plans" }),
+          responses: { 200: ok("Started", { type: "object" }, { success: true, id: "…" }), ...ERRORS },
+        },
+      },
+      "/v2/extract/{id}": {
+        get: { tags: ["v2"], summary: "Extraction status and result", parameters: [idParam], responses: { 200: ok("Status", { type: "object" }), ...ERRORS, ...notFound } },
+      },
+      "/v2/team/credit-usage": {
+        get: {
+          tags: ["v2"],
+          summary: "Credits this month (1 credit = 1 page; the plan is the team's pagesPerMonth)",
+          responses: { 200: ok("Usage", { type: "object" }, { success: true, data: { remainingCredits: 4200, planCredits: 5000, billingPeriodStart: "2026-10-01T00:00:00.000Z", billingPeriodEnd: "2026-10-31T23:59:59.999Z" } }), ...ERRORS },
+        },
+      },
+      "/v2/team/credit-usage/historical": { get: { tags: ["v2"], summary: "Credits per month, last 12 months", responses: { 200: ok("Periods", { type: "object" }), ...ERRORS } } },
+      "/v2/team/token-usage": { get: { tags: ["v2"], summary: "AI tokens this month (no token plan: remaining is unlimited)", responses: { 200: ok("Usage", { type: "object" }), ...ERRORS } } },
+      "/v2/team/token-usage/historical": { get: { tags: ["v2"], summary: "AI tokens per month, last 12 months", responses: { 200: ok("Periods", { type: "object" }), ...ERRORS } } },
+      "/v2/team/queue-status": { get: { tags: ["v2"], summary: "Your team's queued and running jobs", responses: { 200: ok("Queue", { type: "object" }), ...ERRORS } } },
+      "/v2/concurrency-check": { get: { tags: ["v2"], summary: "Your team's running jobs and concurrency limit", responses: { 200: ok("Concurrency", { type: "object" }), ...ERRORS } } },
       "/admin/v1/me": {
         get: {
           tags: ["Admin"],

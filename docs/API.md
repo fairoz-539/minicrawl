@@ -19,6 +19,8 @@ Base URL: `http://<host>:3002` (port `MINICRAWL_PORT`). All bodies are JSON.
 - [POST /v1/map](#post-v1map)
 - [POST /v1/search](#post-v1search)
 - [Extract](#extract): `POST /v1/extract`, `GET /v1/extract/{id}`
+- [Batch scrape](#batch-scrape): `POST /v1/batch/scrape` and status, errors, cancel
+- [Firecrawl v2 API](#firecrawl-v2-api): `/v2/*`, what's supported and how options map
 - [Errors](#errors)
 - [Calling it from code](#calling-it-from-code): curl, PowerShell, Python, JavaScript, Firecrawl SDKs
 
@@ -53,6 +55,11 @@ Each key belongs to a team. The team's role checks, quotas, rate limit and featu
 | POST | `/v1/search` | Web search (optionally scrape the results) | yes |
 | POST | `/v1/extract` | AI extraction across URLs | async: returns an id |
 | GET | `/v1/extract/{id}` | Extraction status and result | yes |
+| POST | `/v1/batch/scrape` | Scrape a list of URLs | async: returns an id |
+| GET | `/v1/batch/scrape/{id}` | Batch status and pages | yes |
+| GET | `/v1/batch/scrape/{id}/errors` | Failed pages | yes |
+| DELETE | `/v1/batch/scrape/{id}` | Cancel a batch | yes |
+| | `/v2/*` | The same operations in Firecrawl's v2 shapes, plus team usage. See [Firecrawl v2 API](#firecrawl-v2-api) | |
 | POST | `/mcp` | MCP server for AI agents (see [INTEGRATIONS.md](INTEGRATIONS.md#ai-agents-via-mcp)) | yes |
 
 Unknown fields in a body are rejected with `400 "Unrecognized key in body"`, so typos don't fail silently. The SDK fields `origin` and `integration` are accepted and ignored.
@@ -147,9 +154,12 @@ Scrapes one URL and returns it in the formats you ask for.
 | `html` | Cleaned HTML (same cleaning as markdown) |
 | `rawHtml` | The page's HTML exactly as received or rendered |
 | `links` | Every `http(s)` link on the page, absolute, without `#fragments` |
+| `images` | Every image URL on the page (`img` src/srcset, `og:image`), absolute |
 | `screenshot` | `data:image/png;base64,…` of the viewport (1366×900) |
 | `screenshot@fullPage` | Same, the whole page |
 | `json` | AI-extracted data; needs `jsonOptions` and `ANTHROPIC_API_KEY` |
+| `summary` | A 2–4 sentence AI summary of the page; needs `ANTHROPIC_API_KEY` |
+| `attributes` | Attribute values of matching elements. Needs `attributes: [{"selector": "a.product", "attribute": "data-id"}]`. Returns `[{selector, attribute, values: [...]}]` |
 
 ### Page actions
 
@@ -421,6 +431,76 @@ Returns `{"success": true, "id": "…"}`.
 
 ---
 
+## Batch scrape
+
+Scrape a list of URLs in the background: the same queue, status, errors and cancel as a crawl, without following links. Scrape options (`formats`, `onlyMainContent`, `actions`, …) go at the top level, as in `/v1/scrape`.
+
+```json
+POST /v1/batch/scrape
+{
+  "urls": ["https://example.com/a", "https://example.com/b"],
+  "formats": ["markdown"],
+  "ignoreInvalidURLs": true,
+  "webhook": "https://your-app.example/hooks/minicrawl"
+}
+```
+
+```json
+{ "success": true, "id": "…", "url": "http://localhost:3002/v1/batch/scrape/…", "invalidURLs": [] }
+```
+
+- **One document per URL.** A URL that redirects still gives its own document.
+- **Invalid URLs:** `ignoreInvalidURLs: true` skips invalid URLs, and URLs your organization's domain policy blocks, listing them in `invalidURLs`. Without it, the request fails with `400` (or `403 DOMAIN_NOT_ALLOWED`).
+- **`appendToId`** adds URLs to an existing batch of your team, even one that already finished.
+- **Status:** `GET /v1/batch/scrape/{id}` has the same shape as crawl status, paged with `next`. `GET …/errors` lists failed pages, and `DELETE` cancels.
+- **Webhooks** send `batch_scrape.started`, `batch_scrape.page` and `batch_scrape.completed`.
+- **Limits:** up to 10,000 URLs per request, and your team's `maxCrawlPages` caps a batch too. `maxConcurrency` is accepted but your team's concurrency limit is what applies.
+
+---
+
+## Firecrawl v2 API
+
+Everything above is also available under `/v2`, in the request and response shapes of Firecrawl's v2 API. That's what the official SDKs' **default clients** use (`Firecrawl` in `@mendable/firecrawl-js` and `firecrawl-py`). Both SDKs are tested against minicrawl in CI.
+
+| v2 endpoint | Notes |
+|---|---|
+| `POST /v2/scrape` | |
+| `POST /v2/batch/scrape`, `GET`/`DELETE /v2/batch/scrape/{id}`, `GET …/errors` | `ignoreInvalidURLs` defaults to `true`, as in Firecrawl v2 |
+| `POST /v2/crawl`, `GET`/`DELETE /v2/crawl/{id}`, `GET …/errors` | Cancelling a finished crawl answers `409` |
+| `GET /v2/crawl/active` (alias `/ongoing`) | Your team's running crawls |
+| `POST /v2/map` | `links` are `{url, title}` objects. Titles come from pages minicrawl has scraped before |
+| `POST /v2/search` | Results grouped by source: `data.web`, `data.news`, `data.images` |
+| `POST /v2/extract`, `GET /v2/extract/{id}` | Without `urls`, the prompt is searched on the web |
+| `GET /v2/team/credit-usage`, `/token-usage`, both `/historical` | 1 credit = 1 page. The plan is your team's `pagesPerMonth`; without one, `remainingCredits` is a very large number |
+| `GET /v2/team/queue-status`, `GET /v2/concurrency-check` | Your team's queued and running jobs, and its concurrency limit |
+
+**Formats** are strings or objects:
+- `"markdown"`, `"html"`, `"rawHtml"`, `"links"`, `"images"`, `"summary"`
+- `{"type": "json", "schema": {…}, "prompt": "…"}`
+- `{"type": "screenshot", "fullPage": true}`
+- `{"type": "attributes", "selectors": [{"selector": "…", "attribute": "…"}]}`
+
+Firecrawl formats minicrawl can't produce yet are **refused with a 400**, so you notice instead of getting a document without them: `changeTracking`, `branding`, `product`, `menu`, `question`, `highlights`, `query`, `audio`, `video`, `rawBase64`, `deterministicJson`.
+
+**How v2 options map:**
+
+| v2 option | In minicrawl |
+|---|---|
+| `crawl.sitemap`: `include` / `skip` / `only` | Use the sitemap / ignore it / only sitemap URLs (no link discovery) |
+| `crawl.delay` | Seconds to wait before each page |
+| `crawl.prompt` (options generated by an LLM) | Not supported: `400`. Set `includePaths`, `limit`, … directly |
+| `proxy: "enhanced"` | Same as `stealth` |
+| `location.languages` | Sent as `Accept-Language`. `country` has no effect (no geo proxies) |
+| `zeroDataRetention: true` | Zero data retention for this request, as with the team setting (see [ADMIN.md](ADMIN.md#team-settings)) |
+| `search.sources` | `web`, `news`, `images` (news and images need SearXNG) |
+| `search.categories` | `github`, `research`, `pdf`, applied as search operators |
+| `search.includeDomains` / `excludeDomains` | Filter results by domain |
+| `mobile`, `parsers`, `blockAds`, `fastMode`, `removeBase64Images`, `maxAge`, `minAge`, `storeInCache`, `maxConcurrency`, `robotsUserAgent` | Accepted, no effect yet |
+
+Firecrawl-only endpoints are not available: agent, deep research, browser sessions, monitors, parse, and `crawl/params-preview`. Some of these are on the [roadmap](../README.md#%EF%B8%8F-roadmap).
+
+---
+
 ## Errors
 
 Every error has the same shape:
@@ -520,14 +600,23 @@ const { links } = await fetch(`${BASE}/v1/map`, {
 
 ### Official Firecrawl SDKs
 
-minicrawl implements Firecrawl's **v1** API, so the official JavaScript SDK's v1 client works when you point it at your server:
+Point the official SDKs at your server. Their default (v2) clients and the older v1 client both work:
 
 ```js
-import { FirecrawlAppV1 } from "@mendable/firecrawl-js";
+import Firecrawl from "@mendable/firecrawl-js";
 
-const app = new FirecrawlAppV1({ apiKey: "YOUR_KEY", apiUrl: "http://localhost:3002" });
-const doc = await app.scrapeUrl("https://example.com", { formats: ["markdown"] });
-const map = await app.mapUrl("https://books.toscrape.com", { search: "travel" });
+const fc = new Firecrawl({ apiKey: "YOUR_KEY", apiUrl: "http://localhost:3002" });
+const doc = await fc.scrape("https://example.com", { formats: ["markdown", "links"] });
+const job = await fc.crawl("https://docs.example.com", { limit: 50 });
+const batch = await fc.batchScrape(["https://a.example", "https://b.example"], { options: { formats: ["markdown"] } });
 ```
 
-What was tested is listed in [SDK compatibility](SELF_HOSTING.md#sdk-compatibility). The SDKs' default (v2) clients and Firecrawl-only endpoints (batch scrape, deep research, llms.txt, credit usage) are not supported. Use the v1 client or plain HTTP.
+```python
+from firecrawl import Firecrawl
+
+fc = Firecrawl(api_key="YOUR_KEY", api_url="http://localhost:3002")
+doc = fc.scrape("https://example.com", formats=["markdown"])
+results = fc.search("self-hosted scraping", sources=["web", "news"], limit=5)
+```
+
+What's covered is listed in [SDK compatibility](SELF_HOSTING.md#sdk-compatibility).

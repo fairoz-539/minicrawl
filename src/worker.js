@@ -64,12 +64,16 @@ async function processKickoff(ctx, job) {
   return { fromSitemap };
 }
 
+/** Webhook event prefix: crawl.* or batch_scrape.* */
+const eventPrefix = sc => (sc?.kind === "batch" ? "batch_scrape" : "crawl");
+
 async function processScrape(ctx, job) {
   const { crawlId, url, depth } = job.data;
   const crawl = await ctx.store.get(crawlId);
   if (!crawl || crawl.status === "cancelled") return null;
   const sc = crawl.data;
   const co = sc.crawlerOptions;
+  const batch = sc.kind === "batch";
 
   // Out of pages for today/this month: stop the whole crawl, not page by page.
   try {
@@ -80,17 +84,21 @@ async function processScrape(ctx, job) {
     throw new Error(`${err.code}: ${err.message}`);
   }
 
+  // crawl option `delay`: seconds to wait before each page.
+  if (co.delay) await sleep(co.delay * 1000);
+
   const { doc, rawHtml, finalUrl, usage } = await scrapeURL(url, sc.scrapeOptions, { ...ctx.scrapeConfig, ...sc.policy });
   await meter(ctx, crawl.team_id, usage);
 
   // Redirected? Lock the landing URL too, so two URLs that redirect to the
   // same page only produce one document (Firecrawl's RacedRedirectError).
-  if (lockKey(finalUrl, co) !== lockKey(url, co) && !await ctx.store.lockURL(crawlId, lockKey(finalUrl, co))) {
+  // A batch returns one document per requested URL, redirects or not.
+  if (!batch && lockKey(finalUrl, co) !== lockKey(url, co) && !await ctx.store.lockURL(crawlId, lockKey(finalUrl, co))) {
     return null;
   }
   if (!sc.zdr) await ctx.store.recordSeen(finalUrl, doc.metadata.title ?? null);
 
-  if (depth < (co.maxDiscoveryDepth ?? Infinity) && (await ctx.store.get(crawlId))?.status === "scraping") {
+  if (!batch && depth < (co.maxDiscoveryDepth ?? Infinity) && (await ctx.store.get(crawlId))?.status === "scraping") {
     const crawler = new Crawler(sc.url, co, sc.robotsTxt);
     const discovered = extractLinks(rawHtml, finalUrl);
     const { links, robotsBlocked } = crawler.filterLinks(discovered);
@@ -101,7 +109,7 @@ async function processScrape(ctx, job) {
     }
   }
 
-  sendWebhook(sc.webhook, "crawl.page", crawlId, [doc]);
+  sendWebhook(sc.webhook, `${eventPrefix(sc)}.page`, crawlId, [doc]);
   return doc;
 }
 
@@ -195,7 +203,7 @@ export function startWorkers(ctx, { concurrency = 4, pollMs = 100, staleLockMs =
       await ctx.queue.reap(staleLockMs);
       for (const id of await ctx.store.finishIdleCrawls()) {
         const crawl = await ctx.store.get(id);
-        sendWebhook(crawl?.data.webhook, "crawl.completed", id, []);
+        sendWebhook(crawl?.data.webhook, `${eventPrefix(crawl?.data)}.completed`, id, []);
       }
     } catch (err) {
       console.error("maintenance tick failed", err);

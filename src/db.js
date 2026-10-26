@@ -118,6 +118,9 @@ export function openDb(path = process.env.DB_PATH ?? "minicrawl.db") {
 
 const parse = s => (s == null ? null : JSON.parse(s));
 
+/** New crawls are not considered finished for this long (their first job may not be queued yet). */
+export const IDLE_GRACE_MS = 1000;
+
 /** Excludes teams whose running jobs already reach limits.concurrency. Shared with src/db-postgres.js. */
 export const CLAIM_SKIP_FULL_TEAMS = `team_id NOT IN (
   SELECT a.team_id FROM jobs a JOIN teams t ON t.id = a.team_id
@@ -173,6 +176,9 @@ export class Queue {
         SELECT id, data, error FROM jobs
         WHERE group_id = ? AND type = 'scrape' AND status = 'failed' ORDER BY created_at ASC`),
       dropQueued: db.prepare("DELETE FROM jobs WHERE group_id = ? AND status = 'queued'"),
+      teamCounts: db.prepare(`
+        SELECT status, COUNT(*) AS n FROM jobs WHERE team_id = ? AND status IN ('queued', 'active') GROUP BY status`),
+      lastSuccess: db.prepare("SELECT MAX(finished_at) AS at FROM jobs WHERE team_id = ? AND status = 'completed'"),
     };
   }
 
@@ -233,6 +239,13 @@ export class Queue {
   async dropQueued(groupId) {
     return this.stmts.dropQueued.run(groupId).changes;
   }
+
+  /** The team's queued and running jobs, and when its last job finished (ms or null). */
+  async teamStats(teamId) {
+    const counts = { queued: 0, active: 0 };
+    for (const { status, n } of this.stmts.teamCounts.all(teamId)) counts[status] = n;
+    return { ...counts, lastSuccessAt: this.stmts.lastSuccess.get(teamId).at ?? null };
+  }
 }
 
 export class CrawlStore {
@@ -245,12 +258,15 @@ export class CrawlStore {
       setStatus: db.prepare(
         "UPDATE crawls SET status = ?, finished_at = ? WHERE id = ? AND status = 'scraping'",
       ),
-      // Firecrawl's nuq_group_crawl_finished cron, as one statement.
+      // Firecrawl's nuq_group_crawl_finished cron, as one statement. A crawl
+      // younger than a second may not have its first job queued yet.
       finishIdle: db.prepare(`
         UPDATE crawls SET status = 'completed', finished_at = ?
-        WHERE status = 'scraping' AND NOT EXISTS (
+        WHERE status = 'scraping' AND created_at < ? AND NOT EXISTS (
           SELECT 1 FROM jobs WHERE jobs.group_id = crawls.id AND jobs.status IN ('queued', 'active'))
         RETURNING id`),
+      reopen: db.prepare("UPDATE crawls SET status = 'scraping', finished_at = NULL WHERE id = ? AND status = 'completed'"),
+      listActive: db.prepare("SELECT * FROM crawls WHERE team_id = ? AND status = 'scraping' ORDER BY created_at"),
       lock: db.prepare("INSERT OR IGNORE INTO visited (crawl_id, url) VALUES (?, ?)"),
       isVisited: db.prepare("SELECT 1 FROM visited WHERE crawl_id = ? AND url = ?"),
       visitedCount: db.prepare("SELECT COUNT(*) AS n FROM visited WHERE crawl_id = ?"),
@@ -281,8 +297,18 @@ export class CrawlStore {
     return this.stmts.setStatus.run(status, Date.now(), id).changes > 0;
   }
 
-  async finishIdleCrawls() {
-    return this.stmts.finishIdle.all(Date.now()).map(r => r.id);
+  async finishIdleCrawls(now = Date.now()) {
+    return this.stmts.finishIdle.all(now, now - IDLE_GRACE_MS).map(r => r.id);
+  }
+
+  /** A finished batch takes new URLs again (appendToId). */
+  async reopen(id) {
+    return this.stmts.reopen.run(id).changes > 0;
+  }
+
+  /** The team's crawls and batches that are still running. */
+  async listActive(teamId) {
+    return this.stmts.listActive.all(teamId).map(r => ({ ...r, data: parse(r.data) }));
   }
 
   /**

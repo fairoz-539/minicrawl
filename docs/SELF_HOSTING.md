@@ -391,26 +391,27 @@ The full guide covers roles, limits, zero data retention, IP allowlists, domain 
 
 ## SDK compatibility
 
-minicrawl implements Firecrawl's **v1** REST API. Tested with the official JavaScript SDK (`@mendable/firecrawl-js` 4.51, the `FirecrawlAppV1` client, `apiUrl` pointed at minicrawl):
+minicrawl implements Firecrawl's **v1 and v2** REST APIs. CI runs contract tests with the official SDKs against a real minicrawl server:
+- `@mendable/firecrawl-js` 4.51: the default `Firecrawl` client and `FirecrawlAppV1`
+- `firecrawl-py` 4.54: the default `Firecrawl` client
 
-| SDK method | Works |
+| SDK method (JS / Python) | Works |
 |---|---|
-| `scrapeUrl` (formats, actions, screenshots) | ✅ |
-| `mapUrl` | ✅ |
-| `crawlUrl` (waits and collects all pages) | ✅ |
-| `asyncCrawlUrl`, `checkCrawlStatus`, `cancelCrawl` | ✅ |
-| `checkCrawlErrors` | ✅ |
-| `search` (with and without `scrapeOptions`) | ✅ |
-| `asyncExtract`, `getExtractStatus` | ✅ (results need `ANTHROPIC_API_KEY`) |
+| `scrape` (string and object formats: markdown, html, links, images, json, summary, screenshot, attributes) | ✅ |
+| `crawl`, `startCrawl` / `start_crawl`, `getCrawlStatus`, `cancelCrawl`, `getCrawlErrors`, `getActiveCrawls` | ✅ |
+| `batchScrape`, `startBatchScrape`, `getBatchScrapeStatus`, `cancelBatchScrape`, `getBatchScrapeErrors` | ✅ |
+| `map` (links with titles) | ✅ |
+| `search` (web, news, images; with `scrapeOptions`) | ✅ (news and images need SearXNG) |
+| `extract`, `startExtract`, `getExtractStatus` | ✅ (needs `ANTHROPIC_API_KEY`) |
+| `getConcurrency`, `getCreditUsage`, `getTokenUsage`, `getQueueStatus`, `…Historical` | ✅ |
+| v1 client: `scrapeUrl`, `crawlUrl`, `mapUrl`, `search`, `batchScrapeUrls`, `asyncExtract`, … | ✅ |
 
 ```js
-import { FirecrawlAppV1 } from "@mendable/firecrawl-js";
-const app = new FirecrawlAppV1({ apiKey: "YOUR_KEY", apiUrl: "http://localhost:3002" });
+import Firecrawl from "@mendable/firecrawl-js";
+const fc = new Firecrawl({ apiKey: "YOUR_KEY", apiUrl: "http://localhost:3002" });
 ```
 
-Not supported:
-- The SDKs' default v2 clients
-- Firecrawl-only endpoints: batch scrape, deep research, llms.txt, credit/queue usage
+Not supported: agent, deep research, browser sessions, monitors, parse, crawl params preview, and some formats (`changeTracking`, `branding`, `question`, …). These return an error rather than being silently ignored. See [Firecrawl v2 API](API.md#firecrawl-v2-api) for the details.
 
 ---
 

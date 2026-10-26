@@ -4,6 +4,8 @@
 //   POST   /v1/map
 //   POST   /v1/search
 //   POST   /v1/extract        GET /v1/extract/:id
+//   POST   /v1/batch/scrape   GET /v1/batch/scrape/:id   DELETE /v1/batch/scrape/:id   GET /v1/batch/scrape/:id/errors
+//   /v2/*        Firecrawl v2 API (src/v2.js)
 //   /admin/v1/*  teams, API keys, usage, audit log (src/admin.js)
 import express from "express";
 import { pathToFileURL } from "node:url";
@@ -21,6 +23,7 @@ import { proxyPoolSizes } from "./proxy.js";
 import { mountDocs } from "./openapi.js";
 import { mountMcp } from "./mcp.js";
 import { mountAdmin } from "./admin.js";
+import { mountV2 } from "./v2.js";
 import { TenancyError, activeKeyCount, tenantAuth } from "./tenancy.js";
 import * as api from "./api.js";
 import { readFileSync } from "node:fs";
@@ -30,6 +33,7 @@ const { version: VERSION } = JSON.parse(readFileSync(new URL("../package.json", 
 function errorStatus(err) {
   if (err instanceof TenancyError) return [err.status, err.code];
   if (err instanceof api.NotFoundError) return [404, err.code];
+  if (err instanceof api.BadRequestError) return [400, err.code];
   if (err instanceof LLMError) return [err.status, err.code];
   if (err instanceof ActionError) return [422, err.code];
   if (err instanceof SearchBlockedError) return [503, err.code];
@@ -93,6 +97,8 @@ export function createApp(ctx, { apiKeys = configuredApiKeys(), mode = "all" } =
         "GET /health", "GET /docs", "GET /openapi.json",
         "POST /v1/scrape", "POST /v1/crawl", "GET /v1/crawl/{id}", "GET /v1/crawl/{id}/errors", "DELETE /v1/crawl/{id}",
         "POST /v1/map", "POST /v1/search", "POST /v1/extract", "GET /v1/extract/{id}", "POST /mcp",
+        "POST /v1/batch/scrape", "GET /v1/batch/scrape/{id}", "GET /v1/batch/scrape/{id}/errors", "DELETE /v1/batch/scrape/{id}",
+        "/v2/{scrape,batch/scrape,crawl,map,search,extract,team/*,concurrency-check}",
         "/admin/v1/{me,org,teams,keys,usage,audit}",
       ],
     }),
@@ -105,6 +111,7 @@ export function createApp(ctx, { apiKeys = configuredApiKeys(), mode = "all" } =
   const auth = tenantAuth(ctx, { envKeys: apiKeys });
   mountMcp(app, ctx, { auth, version: VERSION });
   mountAdmin(app, ctx, { auth: tenantAuth(ctx, { envKeys: apiKeys, meterRequests: false }) });
+  mountV2(app, ctx, { auth });
 
   const v1 = express.Router();
   v1.use(auth);
@@ -135,7 +142,33 @@ export function createApp(ctx, { apiKeys = configuredApiKeys(), mode = "all" } =
   v1.get("/crawl/:id/errors", handle(req => api.crawlErrors(ctx, req.params.id, req.tenant)));
   // The Firecrawl JS SDK's v1 checkCrawlErrors() sends DELETE; it only reads.
   v1.delete("/crawl/:id/errors", handle(req => api.crawlErrors(ctx, req.params.id, req.tenant)));
-  v1.delete("/crawl/:id", handle(req => api.cancelCrawl(ctx, req.params.id, req.tenant)));
+  v1.delete(
+    "/crawl/:id",
+    handle(async req => {
+      const { wasRunning: _w, ...out } = await api.cancelCrawl(ctx, req.params.id, req.tenant);
+      return out;
+    }),
+  );
+  v1.post("/batch/scrape", handle(req => api.startBatch(ctx, req.body, base(req), req.tenant)));
+  v1.get(
+    "/batch/scrape/:id",
+    handle(req =>
+      api.crawlStatus(
+        ctx,
+        req.params.id,
+        { skip: Math.max(0, parseInt(req.query.skip ?? "0", 10) || 0), baseUrl: base(req), kind: "batch" },
+        req.tenant,
+      ),
+    ),
+  );
+  v1.get("/batch/scrape/:id/errors", handle(req => api.crawlErrors(ctx, req.params.id, req.tenant, { kind: "batch" })));
+  v1.delete(
+    "/batch/scrape/:id",
+    handle(async req => {
+      const { wasRunning: _w, ...out } = await api.cancelCrawl(ctx, req.params.id, req.tenant, { kind: "batch" });
+      return out;
+    }),
+  );
   v1.post("/map", handle(req => api.map(ctx, req.body, req.tenant)));
   v1.post("/search", handle(req => api.search(ctx, req.body, req.tenant)));
   v1.post("/extract", handle(req => api.startExtract(ctx, req.body, req.tenant)));

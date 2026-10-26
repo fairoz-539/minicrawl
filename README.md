@@ -11,7 +11,7 @@ It reads web pages, JavaScript apps, PDFs, Office files and images, and runs on 
 [![CI](https://github.com/fairoz-539/minicrawl/actions/workflows/ci.yml/badge.svg)](https://github.com/fairoz-539/minicrawl/actions/workflows/ci.yml)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A522.13-339933?logo=node.js&logoColor=white)](package.json)
 [![Docker](https://img.shields.io/badge/docker-compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
-[![Firecrawl v1 compatible](https://img.shields.io/badge/Firecrawl-v1%20compatible-F97316)](docs/API.md#official-firecrawl-sdks)
+[![Firecrawl v1 + v2 compatible](https://img.shields.io/badge/Firecrawl-v1%20%2B%20v2%20compatible-F97316)](docs/API.md#official-firecrawl-sdks)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 [**Quick start**](#-quick-start) ·
@@ -34,7 +34,7 @@ It reads web pages, JavaScript apps, PDFs, Office files and images, and runs on 
 
 AI apps, RAG pipelines and agents need web content as **clean text**, not raw HTML full of menus, ads and cookie banners. Hosted scraping APIs are great, but they cost per page, see every URL you fetch, and lock the code that does the hard work behind their cloud.
 
-minicrawl is a **self-hosted alternative that speaks the same API as [Firecrawl](https://github.com/firecrawl/firecrawl) v1**. Point your existing Firecrawl v1 code at your own server, keep your data on your machine, and pay nothing per page.
+minicrawl is a **self-hosted alternative that speaks the same API as [Firecrawl](https://github.com/firecrawl/firecrawl)**, v1 and v2. Point your existing Firecrawl code and the official SDKs at your own server, keep your data on your machine, and pay nothing per page.
 
 ```bash
 curl -X POST http://localhost:3002/v1/scrape \
@@ -103,6 +103,8 @@ Prefer building from source? Use `docker compose up -d --build`. For servers, HT
 | `POST` | [`/v1/map`](docs/API.md#post-v1map) | List a site's URLs |
 | `POST` | [`/v1/search`](docs/API.md#post-v1search) | Search the web, optionally scraping each result |
 | `POST` | [`/v1/extract`](docs/API.md#extract) | AI extraction across pages (async); get it with `GET /v1/extract/{id}` |
+| `POST` | [`/v1/batch/scrape`](docs/API.md#batch-scrape) | Scrape a list of URLs (async) |
+| | [`/v2/*`](docs/API.md#firecrawl-v2-api) | All of the above in Firecrawl's v2 shapes, for the SDKs' default clients |
 | `GET` | [`/health`](docs/API.md#health-and-discovery) | Status and which features are enabled |
 | `GET` | `/docs` · `/openapi.json` | Interactive explorer · OpenAPI spec |
 
@@ -226,13 +228,14 @@ PowerShell examples and every option are in the **[API reference](docs/API.md#ca
 |---|:---:|:---:|:---:|
 | scrape · crawl · map · search · extract | ✅ | ✅ | ✅ |
 | Firecrawl v1 API | ✅ | ✅ | ✅ |
+| Firecrawl v2 API and batch scrape | ✅ | ✅ | ✅ |
 | JS rendering, actions, screenshots | ✅ | ✅ | ✅ |
 | PDF / Office / image OCR | ✅ offline | partial | ✅ |
 | Services to run | 2 containers (API, workers and Postgres to scale out) | API, workers, Postgres, Redis, RabbitMQ, Playwright | – |
 | Interactive API docs (`/docs`) | ✅ | – | ✅ (website) |
 | Teams, per-team keys, quotas, usage, audit log | ✅ | – | ✅ |
 | Anti-bot network (stealth fleet, residential proxies) | bring your own proxies | – | ✅ |
-| v2 API, batch scrape, deep research, change monitoring | – | ✅ | ✅ |
+| Deep research, agent, change monitoring | – | ✅ | ✅ |
 | Cost | free, your hardware | free, your hardware | per page |
 
 minicrawl is not affiliated with Firecrawl. It is an independent, simpler implementation of the same API idea.
@@ -305,12 +308,15 @@ See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the workflow and conventions.
 
 ## 🗺️ Roadmap
 
-- [ ] Batch scrape endpoint (`/v1/batch/scrape`)
-- [ ] Prebuilt multi-arch Docker image on GHCR
-- [ ] Per-domain rate limiting / politeness delays
-- [ ] Firecrawl v2 API compatibility
-- [ ] Change tracking (diff a page between scrapes)
-- [ ] More AI providers (OpenAI-compatible, Ollama)
+- [x] Prebuilt multi-arch Docker image on GHCR (1.1)
+- [x] Scale mode: Postgres, separate API and worker containers, Helm chart (1.2)
+- [x] Teams, hashed API keys, quotas, usage metering, audit log (1.3)
+- [x] Firecrawl v2 API and batch scrape, tested with the official SDKs (1.4)
+- [ ] Page cache (`maxAge`) and local AI (OpenAI-compatible APIs, Ollama)
+- [ ] Change monitoring (diff pages between checks, with notifications)
+- [ ] Persistent browser sessions
+- [ ] Web dashboard with SSO
+- [ ] Prometheus metrics and OpenTelemetry tracing
 
 Ideas and votes are welcome in [issues](https://github.com/fairoz-539/minicrawl/issues).
 
