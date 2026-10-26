@@ -57,6 +57,28 @@ jobs:
       # worker processes, killed-worker recovery), which only runs here.
       - run: npm test
 
+  ollama:
+    # Real local-model extraction. Not a required check: it downloads a ~1 GB model.
+    name: Local AI (Ollama)
+    runs-on: ubuntu-24.04
+    services:
+      ollama:
+        image: ollama/ollama:latest
+        ports: ["11434:11434"]
+    env:
+      OLLAMA_TEST_URL: http://localhost:11434
+      OLLAMA_TEST_MODEL: qwen2.5:1.5b
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Pull the model
+        run: curl -fsS http://localhost:11434/api/pull -d '{"model":"qwen2.5:1.5b","stream":false}'
+      - run: node --disable-warning=ExperimentalWarning --test --test-timeout=600000 test/ollama.test.js
+
   helm:
     name: Helm chart
     runs-on: ubuntu-24.04

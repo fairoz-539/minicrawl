@@ -9,6 +9,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { TenancyStore } from "./tenancy-store.js";
+import { PageCacheStore } from "./page-cache.js";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS jobs (
@@ -97,6 +98,14 @@ CREATE INDEX IF NOT EXISTS audit_org_at_idx ON audit_log (org_id, at);
 CREATE INDEX IF NOT EXISTS audit_team_at_idx ON audit_log (team_id, at);
 `;
 
+// Same table as migrations/postgres/003_page_cache.sql.
+const PAGE_CACHE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS page_cache (
+  key TEXT PRIMARY KEY, url TEXT NOT NULL, payload TEXT NOT NULL, size INTEGER NOT NULL, created_at INTEGER NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS page_cache_created_idx ON page_cache (created_at);
+`;
+
 /** Databases created before 1.3 lack the team and expiry columns. */
 function upgradeColumns(db) {
   for (const table of ["jobs", "crawls"]) {
@@ -113,6 +122,7 @@ export function openDb(path = process.env.DB_PATH ?? "minicrawl.db") {
   db.exec(SCHEMA);
   upgradeColumns(db);
   db.exec(TENANCY_SCHEMA);
+  db.exec(PAGE_CACHE_SCHEMA);
   return db;
 }
 
@@ -398,18 +408,21 @@ export class CrawlStore {
 /** The storage interface every backend provides (see src/storage.js). */
 export function openSqliteStorage(path) {
   const db = openDb(path);
+  // Portable-SQL adapter for the stores shared with the Postgres backend.
+  const adapter = {
+    async all(sql, params) {
+      return db.prepare(sql).all(...params);
+    },
+    async run(sql, params) {
+      return Number(db.prepare(sql).run(...params).changes);
+    },
+  };
   return {
     kind: "sqlite",
     queue: new Queue(db),
     store: new CrawlStore(db),
-    tenancy: new TenancyStore({
-      async all(sql, params) {
-        return db.prepare(sql).all(...params);
-      },
-      async run(sql, params) {
-        return Number(db.prepare(sql).run(...params).changes);
-      },
-    }),
+    tenancy: new TenancyStore(adapter),
+    cache: new PageCacheStore(adapter),
     async ping() {
       db.prepare("SELECT 1").get();
     },

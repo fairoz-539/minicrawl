@@ -73,7 +73,7 @@ export async function scrape(ctx, body, tenant = SYSTEM_TENANT, { zdr = false } 
   checkUrl(tenant, url);
   const policy = scrapePolicy(tenant, opts);
   await checkPageQuota(ctx, tenant.limits, tenant.teamId);
-  const { doc, usage } = await scrapeURL(url, opts, { ...ctx.scrapeConfig, ...policy });
+  const { doc, usage } = await scrapeURL(url, opts, { ...ctx.scrapeConfig, ...policy, zdr: zdr || !!tenant.settings.zdr });
   await meter(ctx, tenant.teamId, usage);
   await recordSeen(ctx, tenant, doc, zdr);
   return { success: true, data: doc };
@@ -269,7 +269,7 @@ export async function search(ctx, body, tenant = SYSTEM_TENANT) {
   // Scrape every result, as Firecrawl does when scrapeOptions is given.
   const data = await mapLimit(results, 4, async r => {
     try {
-      const { doc, usage } = await scrapeURL(r.url, so, { ...ctx.scrapeConfig, ...policy });
+      const { doc, usage } = await scrapeURL(r.url, so, { ...ctx.scrapeConfig, ...policy, zdr: !!tenant.settings.zdr });
       await meter(ctx, tenant.teamId, usage);
       await recordSeen(ctx, tenant, doc);
       return { ...r, ...doc };
@@ -307,7 +307,7 @@ export async function searchSources(ctx, req, tenant = SYSTEM_TENANT) {
   if (so && out.web?.length) {
     out.web = await mapLimit(out.web, 4, async r => {
       try {
-        const { doc, usage } = await scrapeURL(r.url, so, { ...ctx.scrapeConfig, ...policy });
+        const { doc, usage } = await scrapeURL(r.url, so, { ...ctx.scrapeConfig, ...policy, zdr: zdr || !!tenant.settings.zdr });
         await meter(ctx, tenant.teamId, usage);
         await recordSeen(ctx, tenant, doc, zdr);
         return { ...r, ...doc };

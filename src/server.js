@@ -13,7 +13,7 @@ import { z } from "zod";
 import { openStorage } from "./storage.js";
 import { startWorkers } from "./worker.js";
 import { ActionError, closeBrowser, FatalScrapeError, ScrapeTimeoutError, SiteBlockedError } from "./engines.js";
-import { LLMError } from "./llm.js";
+import { LLMError, llmStatus } from "./llm.js";
 import { SearchBlockedError } from "./search.js";
 import { UnsupportedFileError } from "./documents.js";
 import { closeOcr, ocrAvailable } from "./ocr.js";
@@ -71,7 +71,8 @@ async function detectFeatures() {
   };
   return {
     ...featureCache,
-    ai: !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN),
+    ai: llmStatus().configured,
+    llm: { provider: llmStatus().provider, model: llmStatus().model },
     search: process.env.SEARXNG_ENDPOINT ? "searxng" : "duckduckgo",
     proxies: proxyPoolSizes(),
   };
@@ -225,7 +226,7 @@ function healthHandler(ctx, { envKeys = [], mode = "all" }) {
 export async function createContext({ dbPath } = {}) {
   const storage = await openStorage({ dbPath });
   await storage.tenancy.ensureDefaults();
-  return { storage, queue: storage.queue, store: storage.store, scrapeConfig: {} };
+  return { storage, queue: storage.queue, store: storage.store, scrapeConfig: { cache: storage.cache } };
 }
 
 const MODES = ["all", "api", "worker"];

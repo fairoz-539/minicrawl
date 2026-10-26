@@ -12,6 +12,7 @@ import { randomUUID } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { CLAIM_SKIP_FULL_TEAMS, IDLE_GRACE_MS } from "./db.js";
 import { TenancyStore } from "./tenancy-store.js";
+import { PageCacheStore } from "./page-cache.js";
 
 const MIGRATIONS_DIR = new URL("../migrations/postgres/", import.meta.url);
 const MIGRATION_LOCK = 7_250_118_042; // arbitrary constant for pg_advisory_lock
@@ -380,18 +381,21 @@ export async function openPostgresStorage({ url, ephemeral = false }) {
   pool.on("error", err => console.error("postgres pool error", err.message));
   await migrate(pool);
 
+  // Portable-SQL adapter for the stores shared with the SQLite backend.
+  const adapter = {
+    async all(sql, params) {
+      return (await pool.query(numbered(sql), params)).rows;
+    },
+    async run(sql, params) {
+      return (await pool.query(numbered(sql), params)).rowCount;
+    },
+  };
   return {
     kind: "postgres",
     queue: new PgQueue(pool),
     store: new PgCrawlStore(pool),
-    tenancy: new TenancyStore({
-      async all(sql, params) {
-        return (await pool.query(numbered(sql), params)).rows;
-      },
-      async run(sql, params) {
-        return (await pool.query(numbered(sql), params)).rowCount;
-      },
-    }),
+    tenancy: new TenancyStore(adapter),
+    cache: new PageCacheStore(adapter),
     async ping() {
       await pool.query("SELECT 1");
     },

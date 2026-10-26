@@ -55,7 +55,7 @@ const scrapeErrors = {
     description: "`UNSUPPORTED_FILE`, `ACTION_FAILED`, `NO_BROWSER`, `NO_STEALTH_PROXY`, `LLM_REFUSAL`",
     content: json(ref("Error")),
   },
-  503: { description: "`LLM_NOT_CONFIGURED` (json format without ANTHROPIC_API_KEY)", content: json(ref("Error")) },
+  503: { description: "`LLM_NOT_CONFIGURED` (json/summary without an AI provider: ANTHROPIC_API_KEY, or LLM_BASE_URL + LLM_MODEL)", content: json(ref("Error")) },
 };
 const notFound = { 404: { description: "Unknown id", content: json(ref("Error")) } };
 const idParam = { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } };
@@ -168,7 +168,7 @@ export function buildSpec() {
       { name: "Crawl", description: "Whole sites, asynchronously" },
       { name: "Map", description: "List a site's URLs" },
       { name: "Search", description: "Web search via SearXNG" },
-      { name: "Extract", description: "AI extraction with Claude (needs ANTHROPIC_API_KEY)" },
+      { name: "Extract", description: "AI extraction with Claude or a local model (ANTHROPIC_API_KEY, or LLM_BASE_URL + LLM_MODEL)" },
       { name: "Batch", description: "Many URLs at once, asynchronously" },
       { name: "v2", description: "Firecrawl v2 API: the shapes of the current Firecrawl SDKs (Firecrawl / firecrawl-py v2 clients)" },
       { name: "System" },

@@ -82,7 +82,7 @@ export const scrapeOptions = z
         z.enum(["markdown", "html", "rawHtml", "links", "images", "screenshot", "screenshot@fullPage", "json", "summary", "attributes"]),
       )
       .default(["markdown"])
-      .describe("What to return. json and summary need ANTHROPIC_API_KEY; json needs jsonOptions, attributes needs attributes"),
+      .describe("What to return. json and summary need an AI provider (ANTHROPIC_API_KEY or LLM_BASE_URL); json needs jsonOptions, attributes needs attributes"),
     jsonOptions: jsonOptions.optional(),
     attributes: z
       .array(z.object({ selector: z.string().min(1), attribute: z.string().min(1) }).strict())
@@ -102,6 +102,13 @@ export const scrapeOptions = z
     waitFor: z.number().int().min(0).max(60_000).default(0).describe("Milliseconds to wait after load (uses the browser)"),
     timeout: z.number().int().min(1000).max(300_000).default(30_000).describe("Milliseconds before giving up"),
     engine: z.enum(["auto", "fetch", "browser"]).default("auto").describe("Force an engine; auto picks per page"),
+    maxAge: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe("Use a cached copy of the page if it is younger than this (ms). 0 = always fetch. Default PAGE_CACHE_DEFAULT_MAX_AGE_MS (0)"),
+    storeInCache: z.boolean().default(true).describe("Save the fetched page in the cache"),
   })
   .strict();
 

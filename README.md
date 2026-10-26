@@ -70,7 +70,7 @@ docker compose pull && docker compose up -d
 Prefer building from source? Use `docker compose up -d --build`. For servers, HTTPS, scaling out with Postgres or Kubernetes, configuration and troubleshooting, see the **[self-hosting guide](docs/SELF_HOSTING.md)**.
 
 > [!IMPORTANT]
-> **Bring your own keys.** The repository contains no keys. Every installation generates its own API key, kept only in its own `.env`, which is git-ignored and excluded from Docker builds. AI extraction uses each installer's own `ANTHROPIC_API_KEY`. The container refuses to start without a key, or with a placeholder or weak one.
+> **Bring your own keys.** The repository contains no keys. Every installation generates its own API key, kept only in its own `.env`, which is git-ignored and excluded from Docker builds. AI extraction runs on your own local model (Ollama and other OpenAI-compatible servers), or on each installer's own `ANTHROPIC_API_KEY`. The container refuses to start without a key, or with a placeholder or weak one.
 
 ## 🧩 Features
 
@@ -84,7 +84,8 @@ Prefer building from source? Use `docker compose up -d --build`. For servers, HT
 | 🕸️ **Crawl** | Whole sites: robots.txt, sitemaps, include/exclude regexes, depth and page limits, dedupe of URL variants and redirects, webhooks |
 | 🗺️ **Map** | A site's URLs in seconds, ranked by relevance to a search term |
 | 🔎 **Search** | Web search through a bundled private SearXNG; optionally scrape every result |
-| 🤖 **AI extraction** | Give a JSON Schema and/or a prompt and get structured data back, from one page or a whole site, via Claude structured outputs |
+| 🤖 **AI extraction** | Give a JSON Schema and/or a prompt and get structured data back, from one page or a whole site. Runs on **your own model** (Ollama, vLLM, LM Studio, llama.cpp) or Claude |
+| ♻️ **Page cache** | `maxAge` reuses pages fetched recently, kept in minicrawl's own database, so repeat scrapes and re-crawls skip the network |
 | 🧠 **MCP for AI agents** | A built-in MCP server (`/mcp`) gives Claude Code, Cursor, VS Code and Claude Desktop scrape, crawl, map, search and extract tools |
 | 🦜 **RAG frameworks** | Python client with a **LangChain** loader and a **LlamaIndex** reader |
 | 🛡️ **Proxies** | Bring-your-own basic and stealth pools; blocked requests retry through stealth automatically |
@@ -251,7 +252,7 @@ flowchart LR
     E -->|JS shell · bot check · slow| B[Headless Chromium]
     F & B --> D[Files: PDF · DOCX · XLSX · PPTX · OCR]
     D --> M[Clean HTML → Markdown]
-    M --> L[AI extraction<br/>Claude]
+    M --> L[AI extraction<br/>local model or Claude]
     A -->|crawl / extract jobs| Q[(SQLite queue)]
     Q --> W[Workers] --> E
     A -->|search| S[SearXNG]
@@ -312,7 +313,7 @@ See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the workflow and conventions.
 - [x] Scale mode: Postgres, separate API and worker containers, Helm chart (1.2)
 - [x] Teams, hashed API keys, quotas, usage metering, audit log (1.3)
 - [x] Firecrawl v2 API and batch scrape, tested with the official SDKs (1.4)
-- [ ] Page cache (`maxAge`) and local AI (OpenAI-compatible APIs, Ollama)
+- [x] Page cache (`maxAge`) and local AI (Ollama and other OpenAI-compatible servers) (1.5)
 - [ ] Change monitoring (diff pages between checks, with notifications)
 - [ ] Persistent browser sessions
 - [ ] Web dashboard with SSO

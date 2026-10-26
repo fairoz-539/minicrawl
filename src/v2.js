@@ -114,8 +114,9 @@ export const scrapeOptionsV2 = z
     removeBase64Images: z.boolean().optional(),
     fastMode: z.boolean().optional(),
     blockAds: z.boolean().optional(),
-    maxAge: z.number().int().min(0).optional(),
     minAge: z.number().int().min(0).optional(),
+    // Page cache:
+    maxAge: z.number().int().min(0).optional().describe("Use a cached copy younger than this (ms)"),
     storeInCache: z.boolean().optional(),
   })
   .strict();
@@ -139,7 +140,7 @@ export function toScrapeOptions(o = {}) {
     headers["Accept-Language"] = o.location.languages.join(",");
   }
   if (Object.keys(headers).length) out.headers = headers;
-  for (const k of ["includeTags", "excludeTags", "onlyMainContent", "waitFor", "actions", "skipTlsVerification"]) {
+  for (const k of ["includeTags", "excludeTags", "onlyMainContent", "waitFor", "actions", "skipTlsVerification", "maxAge", "storeInCache"]) {
     if (o[k] !== undefined) out[k] = o[k];
   }
   if (o.timeout !== undefined) out.timeout = Math.min(o.timeout, 300_000);

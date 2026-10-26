@@ -12,6 +12,7 @@ This guide gets minicrawl running on your own computer or server. The recommende
 - [Running without Docker](#running-without-docker-nodejs)
 - [Updating, backups, logs](#operations)
 - [Sizing and tuning](#sizing-and-tuning)
+- [Local AI](#local-ai-ollama-and-other-openai-compatible-servers): AI extraction with Ollama or another local model server
 - [Scale mode](#scale-mode-postgres-many-workers): Postgres, separate API and worker containers, Helm
 - [Teams, keys and quotas](#teams-keys-and-quotas)
 - [SDK compatibility](#sdk-compatibility)
@@ -135,7 +136,7 @@ curl http://localhost:3002/health
 {"status":"ok","auth":true,"features":{"browser":true,"ocr":true,"ai":false,"search":"searxng",…}}
 ```
 
-`"ai": false` just means you haven't added `ANTHROPIC_API_KEY` yet.
+`"ai": false` just means you haven't set up AI extraction yet: a local model ([Local AI](#local-ai-ollama-and-other-openai-compatible-servers)) or `ANTHROPIC_API_KEY`.
 
 ### 7. Make your first request
 
@@ -170,11 +171,17 @@ All settings live in `.env`. After changing it, run `docker compose up -d` to ap
 | `MINICRAWL_BIND` | `0.0.0.0` | `127.0.0.1` = reachable only from this machine; `0.0.0.0` = also from your network |
 | `SEARXNG_SECRET` | built-in | Random string for the bundled SearXNG |
 | **AI extraction** | | |
-| `ANTHROPIC_API_KEY` | – | Enables the `json` format and `/v1/extract` ([get a key](https://console.anthropic.com)) |
-| `LLM_MODEL` | `claude-opus-5-5` | Claude model |
+| `LLM_BASE_URL` | – | An OpenAI-compatible server (Ollama, vLLM, LM Studio, llama.cpp), e.g. `http://ollama:11434/v1`. See [Local AI](#local-ai-ollama-and-other-openai-compatible-servers) |
+| `LLM_MODEL` | `claude-opus-5-5` | The model. Required with `LLM_BASE_URL` (e.g. `qwen3:8b`) |
+| `LLM_API_KEY` | – | For OpenAI-compatible servers that want a key |
+| `ANTHROPIC_API_KEY` | – | Use Claude instead ([get a key](https://console.anthropic.com)) |
 | `LLM_EFFORT` | `medium` | `low` … `max`: depth vs. cost |
 | `LLM_FALLBACKS` | `true` | Server-side fallback when the model declines |
 | `EXTRACT_MAX_PAGES` | `10` | Pages read per `/v1/extract` job |
+| **Page cache** | | |
+| `PAGE_CACHE` | `true` | Keep fetched pages for reuse with `maxAge` ([details](API.md#page-cache)) |
+| `PAGE_CACHE_TTL_HOURS` | `48` | How long cached pages are kept |
+| `PAGE_CACHE_DEFAULT_MAX_AGE_MS` | `0` | `maxAge` for requests that don't send one |
 | **Proxies** | | |
 | `PROXY_URLS` | – | Basic pool: `http://user:pass@host:port,…` (rotated) |
 | `STEALTH_PROXY_URLS` | – | Stealth pool (e.g. residential), used after a block or with `proxy:"stealth"` |
@@ -333,6 +340,59 @@ docker run --rm -v minicrawl_minicrawl-data:/data -v "$PWD":/backup busybox tar 
 - To be polite to sites you don't own, keep `WORKERS` low and use `limit`. minicrawl has no per-site delay.
 - Need more than one machine can do? See [Scale mode](#scale-mode-postgres-many-workers).
 
+## Local AI (Ollama and other OpenAI-compatible servers)
+
+AI extraction (the `json` and `summary` formats, `/v1/extract`) can run on a model on your own hardware. No API key and no per-request cost, and page content never leaves your machine.
+
+### With the bundled Ollama
+
+1. Add to `.env`:
+
+   ```bash
+   LLM_BASE_URL=http://ollama:11434/v1
+   LLM_MODEL=qwen3:8b
+   ```
+
+2. Start minicrawl with the `local-ai` profile, and download the model once (about 5 GB):
+
+   ```bash
+   docker compose --profile local-ai up -d
+   docker compose exec ollama ollama pull qwen3:8b
+   ```
+
+3. Check it: `curl http://localhost:3002/health` shows `"ai": true` and `"llm": {"provider": "openai", "model": "qwen3:8b"}`.
+
+**Choosing a model** (bigger is more accurate, slower, and needs more memory):
+
+| Model | Download | Good for |
+|---|---|---|
+| `qwen2.5:1.5b` | ~1 GB | Simple fields on short pages; runs on any CPU |
+| `qwen3:8b` | ~5 GB | A good default: most extraction jobs. 16 GB RAM, or a GPU |
+| `qwen3:32b`, `llama3.3:70b` | 20–40 GB | Long, messy pages and complex schemas. Needs a GPU |
+
+**GPU:** with an NVIDIA GPU and the NVIDIA Container Toolkit, uncomment the `deploy` block of the `ollama` service in `docker-compose.yml`. Without one, Ollama runs on the CPU: fine for small models, slow for big ones.
+
+**Context window:** the bundled Ollama uses 16k tokens (`OLLAMA_CONTEXT_LENGTH`). minicrawl sends at most `LLM_BATCH_CHARS` (default 40,000, about 10k tokens) of page text per request, and splits longer pages and multi-page extractions into batches whose results are merged. If you lower the context, lower `LLM_BATCH_CHARS` too.
+
+### With a model server you already run
+
+Any server with the OpenAI chat completions API works. Point `LLM_BASE_URL` at its `/v1`:
+
+| Server | `LLM_BASE_URL` from Docker |
+|---|---|
+| Ollama on the same machine | `http://host.docker.internal:11434/v1` |
+| LM Studio | `http://host.docker.internal:1234/v1` |
+| vLLM | `http://<host>:8000/v1` |
+| llama.cpp `llama-server` | `http://<host>:8080/v1` |
+
+Set `LLM_API_KEY` if the server wants one. On Linux, `host.docker.internal` needs `extra_hosts: ["host.docker.internal:host-gateway"]` on the `minicrawl` service.
+
+**How it works:**
+- minicrawl asks for JSON-schema structured output, which Ollama, vLLM, LM Studio and llama.cpp support. Servers that don't support it get plain JSON mode, then a prompt.
+- If a reply misses fields or isn't valid JSON, minicrawl asks once more.
+- Reasoning models' `<think>` sections are removed.
+- Token usage is metered per team as with Claude.
+
 ## Scale mode (Postgres, many workers)
 
 The default setup keeps everything in one container with SQLite, which is plenty for one team. When you need more throughput or high availability, **scale mode** splits minicrawl into separate processes that share a Postgres database:
@@ -402,7 +462,7 @@ minicrawl implements Firecrawl's **v1 and v2** REST APIs. CI runs contract tests
 | `batchScrape`, `startBatchScrape`, `getBatchScrapeStatus`, `cancelBatchScrape`, `getBatchScrapeErrors` | ✅ |
 | `map` (links with titles) | ✅ |
 | `search` (web, news, images; with `scrapeOptions`) | ✅ (news and images need SearXNG) |
-| `extract`, `startExtract`, `getExtractStatus` | ✅ (needs `ANTHROPIC_API_KEY`) |
+| `extract`, `startExtract`, `getExtractStatus` | ✅ (needs an AI provider) |
 | `getConcurrency`, `getCreditUsage`, `getTokenUsage`, `getQueueStatus`, `…Historical` | ✅ |
 | v1 client: `scrapeUrl`, `crawlUrl`, `mapUrl`, `search`, `batchScrapeUrls`, `asyncExtract`, … | ✅ |
 
@@ -428,7 +488,7 @@ Not supported: agent, deep research, browser sessions, monitors, parse, crawl pa
 | `503 SEARCH_BLOCKED` or no search results | Check `docker compose ps` shows `searxng` running; `docker compose logs searxng`. Some upstream engines rate-limit; results recover after a while |
 | `403 BLOCKED_URL` when scraping `localhost` or a LAN address | Expected (SSRF protection). From inside Docker, your PC is `host.docker.internal`; allowing it needs `ALLOW_PRIVATE_URLS=true` |
 | `403 BLOCKED_BY_SITE` | The site requires a CAPTCHA or blocks your IP. Add `STEALTH_PROXY_URLS` and use `proxy: "auto"` |
-| `503 LLM_NOT_CONFIGURED` | Add `ANTHROPIC_API_KEY` to `.env`, then `docker compose up -d` |
+| `503 LLM_NOT_CONFIGURED` | Set up a local model ([Local AI](#local-ai-ollama-and-other-openai-compatible-servers)) or add `ANTHROPIC_API_KEY` to `.env`, then `docker compose up -d`. With Ollama, the message may also mean the model isn't pulled yet |
 | Build fails with `rpc error … EOF` or is killed | Docker ran out of memory: close other apps, or raise Docker Desktop's memory limit (Settings → Resources) and build again |
 | Slow first request after start | The browser and OCR engine start on first use (a few seconds) |
 

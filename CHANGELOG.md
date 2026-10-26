@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-27
+
+### Added
+
+- **Local AI:** AI extraction (`json` and `summary` formats, `/v1/extract`, `/v2/extract`) on your own model. It works with any OpenAI-compatible server, such as Ollama, vLLM, LM Studio or llama.cpp: set `LLM_BASE_URL` and `LLM_MODEL`, optionally `LLM_API_KEY`.
+  - It asks for JSON-schema structured output, falling back to plain JSON mode for servers without it.
+  - It retries once when a reply is incomplete.
+  - It removes `<think>` sections from reasoning models.
+  - It uses batch sizes suited to smaller context windows.
+  - Claude stays the default when `LLM_BASE_URL` is unset.
+- **Bundled Ollama:** `docker compose --profile local-ai up -d` (optional GPU block in `docker-compose.yml`).
+- **Page cache:** fetched pages are kept in minicrawl's own database, gzip-compressed, for `PAGE_CACHE_TTL_HOURS` (default 48).
+  - `maxAge` reuses a copy younger than that. Formats and AI extraction are still computed per request.
+  - `storeInCache: false` skips saving.
+  - Documents report `metadata.cacheState` (`hit`/`miss`) and `cachedAt`.
+  - The cache key covers the headers and fetch options.
+  - Pages with actions, error pages and zero-data-retention requests are never cached.
+  - Works in v1, v2, crawls and batches.
+- `/health` reports `features.llm` (`{provider, model}`).
+- CI job **Local AI (Ollama)**: real extraction with `qwen2.5:1.5b`.
+
+### Changed
+
+- Cache hits don't count as browser or OCR pages in usage metering (they still count as pages).
+
 ## [1.4.0] - 2026-10-27
 
 ### Added

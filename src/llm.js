@@ -1,14 +1,32 @@
-// AI extraction with Claude: the `json` scrape format and /v1/extract.
-// Firecrawl does this with OpenAI-style generateObject (transformers/llmExtract.ts);
-// here it is Claude structured outputs (output_config.format json_schema).
+// AI extraction: the `json` and `summary` scrape formats and /v1/extract.
+// Firecrawl does this with OpenAI-style generateObject (transformers/llmExtract.ts).
 //
-// Credentials: ANTHROPIC_API_KEY (or any source the Anthropic SDK resolves).
+// Two providers (LLM_PROVIDER):
+//  - anthropic (default): Claude structured outputs (output_config.format
+//    json_schema). Credentials: ANTHROPIC_API_KEY.
+//  - openai: any OpenAI-compatible chat completions server, typically one you
+//    run yourself: Ollama, vLLM, LM Studio, llama.cpp. LLM_BASE_URL (e.g.
+//    http://localhost:11434/v1), LLM_MODEL, optional LLM_API_KEY. Chosen
+//    automatically when LLM_BASE_URL is set.
 import Anthropic from "@anthropic-ai/sdk";
 
-const MODEL = process.env.LLM_MODEL ?? "claude-opus-5-5";
+export const PROVIDER = (process.env.LLM_PROVIDER ?? (process.env.LLM_BASE_URL ? "openai" : "anthropic")).toLowerCase();
+const OPENAI = PROVIDER === "openai";
+const BASE_URL = (process.env.LLM_BASE_URL ?? "").replace(/\/+$/, "");
+const MODEL = process.env.LLM_MODEL ?? (OPENAI ? "" : "claude-opus-5-5");
 const EFFORT = process.env.LLM_EFFORT ?? "medium";
-const MAX_INPUT_CHARS = Number(process.env.LLM_MAX_INPUT_CHARS ?? 1_500_000); // ~375k tokens
-const BATCH_CHARS = Number(process.env.LLM_BATCH_CHARS ?? 400_000);
+// Local models have much smaller context windows than Claude: smaller batches by default.
+const MAX_INPUT_CHARS = Number(process.env.LLM_MAX_INPUT_CHARS ?? (OPENAI ? 200_000 : 1_500_000)); // ~375k tokens for Claude
+const BATCH_CHARS = Number(process.env.LLM_BATCH_CHARS ?? (OPENAI ? 40_000 : 400_000));
+const MAX_OUTPUT_TOKENS = Number(process.env.LLM_MAX_OUTPUT_TOKENS ?? (OPENAI ? 8192 : 64_000));
+const TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS ?? 300_000);
+if (!["anthropic", "openai"].includes(PROVIDER)) throw new Error(`Unknown LLM_PROVIDER "${PROVIDER}": use anthropic or openai`);
+
+/** For /health: whether AI extraction can work, and with what. */
+export function llmStatus() {
+  const configured = OPENAI ? !!(BASE_URL && MODEL) : !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+  return { configured, provider: PROVIDER, model: MODEL || null };
+}
 // Models that accept the server-side refusal fallback (`fallbacks: "default"`).
 const FALLBACK_MODELS = new Set(["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"]);
 const NO_EFFORT_MODELS = /haiku-4-5|sonnet-4-5/;
@@ -98,7 +116,7 @@ function parseJsonText(text) {
 async function callClaude({ system, userBlocks, schema }) {
   const params = {
     model: MODEL,
-    max_tokens: 64000,
+    max_tokens: MAX_OUTPUT_TOKENS,
     system,
     messages: [{ role: "user", content: userBlocks }],
     ...(schema || !NO_EFFORT_MODELS.test(MODEL)
@@ -151,6 +169,131 @@ async function callClaude({ system, userBlocks, schema }) {
   };
 }
 
+// --- OpenAI-compatible servers ------------------------------------------------
+
+/**
+ * How to ask for JSON, tried in order until the server accepts one. Servers
+ * differ: Ollama, vLLM, LM Studio and llama.cpp take json_schema; some only
+ * json_object; a few neither. The first one that works is remembered.
+ */
+const RESPONSE_FORMATS = ["json_schema", "json_object", "none"];
+let workingFormat = null;
+/** Tests only: forget which response_format the server accepted. */
+export const resetFormatProbe = () => (workingFormat = null);
+
+function responseFormat(kind, schema) {
+  if (kind === "json_schema" && schema) return { type: "json_schema", json_schema: { name: "extraction", schema, strict: true } };
+  if (kind === "json_schema" || kind === "json_object") return { type: "json_object" };
+  return undefined;
+}
+
+/** Reasoning models (Qwen 3, DeepSeek R1, …) may think out loud before answering. */
+const stripThinking = text => text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+
+async function postChat(body) {
+  if (!BASE_URL || !MODEL) {
+    throw new LLMError("AI extraction is not configured: set LLM_BASE_URL and LLM_MODEL", "LLM_NOT_CONFIGURED", 503);
+  }
+  let res;
+  try {
+    res = await fetch(`${BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(process.env.LLM_API_KEY ? { authorization: `Bearer ${process.env.LLM_API_KEY}` } : {}),
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch (err) {
+    if (err.name === "TimeoutError") throw new LLMError(`The model did not answer within ${TIMEOUT_MS} ms`, "LLM_TIMEOUT", 504);
+    throw new LLMError(`Can't reach the LLM server at ${BASE_URL}: ${err.cause?.code ?? err.message}`, "LLM_NOT_CONFIGURED", 503);
+  }
+  const text = await res.text();
+  let json = null;
+  try {
+    json = JSON.parse(text);
+  } catch {}
+  return { status: res.status, json, text };
+}
+
+function openaiError(status, json, text) {
+  const msg = json?.error?.message ?? json?.error ?? text.slice(0, 300);
+  if (status === 401 || status === 403) return new LLMError(`The LLM server refused the credentials: ${msg}`, "LLM_NOT_CONFIGURED", 503);
+  if (status === 404) {
+    return new LLMError(`Model "${MODEL}" not found on ${BASE_URL} (with Ollama: ollama pull ${MODEL}): ${msg}`, "LLM_NOT_CONFIGURED", 503);
+  }
+  if (status === 429) return new LLMError("LLM rate limit reached; retry later", "LLM_RATE_LIMITED", 429);
+  return new LLMError(`LLM error ${status}: ${msg}`, "LLM_ERROR");
+}
+
+/** Top-level keys the schema requires that the result lacks. */
+function missingKeys(data, schema) {
+  if (!schema?.required || !data || typeof data !== "object" || Array.isArray(data)) return [];
+  return schema.required.filter(k => !(k in data));
+}
+
+async function callOpenAI({ system, userBlocks, schema }) {
+  const messages = [
+    { role: "system", content: schema ? `${system}\n\nReply with JSON matching this schema:\n${JSON.stringify(schema)}` : system },
+    { role: "user", content: userBlocks.map(b => b.text).join("\n\n") },
+  ];
+  const usage = { inputTokens: 0, outputTokens: 0, model: MODEL };
+
+  const ask = async msgs => {
+    const formats = workingFormat ? [workingFormat] : RESPONSE_FORMATS;
+    let last;
+    for (const kind of formats) {
+      const format = responseFormat(kind, schema);
+      const { status, json, text } = await postChat({
+        model: MODEL,
+        messages: msgs,
+        temperature: 0,
+        max_tokens: MAX_OUTPUT_TOKENS,
+        ...(format ? { response_format: format } : {}),
+      });
+      // 400/422 on a response_format the server doesn't know: try the next way.
+      if ((status === 400 || status === 422) && format && !workingFormat) {
+        last = openaiError(status, json, text);
+        continue;
+      }
+      if (status !== 200) throw openaiError(status, json, text);
+      workingFormat ??= kind;
+      const choice = json?.choices?.[0];
+      usage.inputTokens += json?.usage?.prompt_tokens ?? 0;
+      usage.outputTokens += json?.usage?.completion_tokens ?? 0;
+      if (choice?.finish_reason === "length") {
+        throw new LLMError("The extracted data was too large for one response (raise LLM_MAX_OUTPUT_TOKENS)", "LLM_OUTPUT_TOO_LARGE", 422);
+      }
+      return stripThinking(choice?.message?.content ?? "");
+    }
+    throw last;
+  };
+
+  let reply = await ask(messages);
+  let data;
+  let problem = null;
+  try {
+    data = parseJsonText(reply);
+    const missing = missingKeys(data, schema);
+    if (missing.length) problem = `It was missing these fields: ${missing.join(", ")}.`;
+  } catch {
+    problem = "It was not valid JSON.";
+  }
+  // Smaller models sometimes slip: one corrective retry.
+  if (problem) {
+    reply = await ask([
+      ...messages,
+      { role: "assistant", content: reply },
+      { role: "user", content: `${problem} Reply again with only the JSON object${schema ? " matching the schema, every field present (null when not found)" : ""}.` },
+    ]);
+    data = parseJsonText(reply);
+  }
+  return { data, usage };
+}
+
+const callModel = args => (OPENAI ? callOpenAI(args) : callClaude(args));
+
 function instruction({ prompt, schema }) {
   if (schema && prompt) return `Extract the data described by the JSON schema. Instructions: ${prompt}`;
   if (schema) return "Extract the data described by the JSON schema from the page content above.";
@@ -200,7 +343,7 @@ export async function extractJson(docs, { schema, prompt, systemPrompt } = {}) {
   if (current.length) batches.push(current);
 
   const run = async batch => {
-    const r = await callClaude({
+    const r = await callModel({
       system,
       userBlocks: [...batch.map(d => pageBlock(d, cap)), { type: "text", text: instruction({ prompt, schema }) }],
       schema: structured,
@@ -215,7 +358,7 @@ export async function extractJson(docs, { schema, prompt, systemPrompt } = {}) {
   } else {
     const partials = [];
     for (const b of batches) partials.push(await run(b));
-    const merged = await callClaude({
+    const merged = await callModel({
       system,
       userBlocks: [
         { type: "text", text: `<partial_results>\n${JSON.stringify(partials, null, 1)}\n</partial_results>` },

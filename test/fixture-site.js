@@ -87,6 +87,7 @@ const FORM = `<!doctype html><html><head><title>Form</title></head><body>
 }, 200)">Greet</button></main></body></html>`;
 
 export async function startFixtureSite() {
+  const counters = new Map(); // /counter fetches, per full URL
   const files = {
     "/scan.png": ["image/png", makePng(["Invoice 4521", "Total 99.50 USD"])],
     "/scanned.pdf": ["application/pdf", makeScannedPdf(["Scanned contract", "Signed 2026"])],
@@ -179,6 +180,13 @@ export async function startFixtureSite() {
     if (pathname === "/latin1") {
       res.writeHead(200, { "content-type": "text/html; charset=windows-1252" });
       return res.end(Buffer.from("<html><body><h1>Caf\xe9 cr\xe8me \x80</h1></body></html>", "latin1"));
+    }
+    // Counts its fetches, so cache tests can tell a cache hit from a fetch.
+    if (pathname === "/counter") {
+      const n = (counters.get(req.url) ?? 0) + 1;
+      counters.set(req.url, n);
+      res.writeHead(200, { "content-type": "text/html" });
+      return res.end(`<html><head><title>Counter</title></head><body><main><h1>Fetch ${n}</h1><p>header: ${req.headers["x-variant"] ?? "none"}</p></main></body></html>`);
     }
     if (pathname === "/slow") {
       setTimeout(() => {

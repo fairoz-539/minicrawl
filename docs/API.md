@@ -91,7 +91,8 @@ Unknown fields in a body are rejected with `400 "Unrecognized key in body"`, so 
 | `auth` | An API key is required |
 | `features.browser` | Headless Chromium is available: JS pages, screenshots, actions |
 | `features.ocr` | Image and scanned-PDF text extraction is available |
-| `features.ai` | `ANTHROPIC_API_KEY` is set: `json` format and `/v1/extract` work |
+| `features.ai` | An AI provider is configured (a local model via `LLM_BASE_URL`, or `ANTHROPIC_API_KEY`): `json`/`summary` formats and `/v1/extract` work |
+| `features.llm` | `{provider, model}`: `openai` (OpenAI-compatible, e.g. Ollama) or `anthropic` |
 | `features.search` | `searxng` (bundled in Docker) or `duckduckgo` (fallback, often blocked) |
 | `features.proxies` | Number of proxies in each pool |
 
@@ -118,6 +119,8 @@ Scrapes one URL and returns it in the formats you ask for.
 | `jsonOptions` | object | – | For the `json` format ([details](#ai-extraction-json-format)) |
 | `proxy` | `auto`/`basic`/`stealth` | `auto` | Proxy tier ([details](#proxies)) |
 | `skipTlsVerification` | bool | `false` | Accept invalid HTTPS certificates |
+| `maxAge` | int (ms) | `0` | Use a cached copy of the page if it's younger than this ([page cache](#page-cache)) |
+| `storeInCache` | bool | `true` | Save the fetched page in the cache |
 
 **Response:**
 
@@ -157,8 +160,8 @@ Scrapes one URL and returns it in the formats you ask for.
 | `images` | Every image URL on the page (`img` src/srcset, `og:image`), absolute |
 | `screenshot` | `data:image/png;base64,…` of the viewport (1366×900) |
 | `screenshot@fullPage` | Same, the whole page |
-| `json` | AI-extracted data; needs `jsonOptions` and `ANTHROPIC_API_KEY` |
-| `summary` | A 2–4 sentence AI summary of the page; needs `ANTHROPIC_API_KEY` |
+| `json` | AI-extracted data; needs `jsonOptions` and an AI provider |
+| `summary` | A 2–4 sentence AI summary of the page; needs an AI provider |
 | `attributes` | Attribute values of matching elements. Needs `attributes: [{"selector": "a.product", "attribute": "data-id"}]`. Returns `[{selector, attribute, values: [...]}]` |
 
 ### Page actions
@@ -203,7 +206,10 @@ A failing action stops the request with `422 ACTION_FAILED` and a message such a
 
 ### AI extraction (json format)
 
-Turns a page into structured data with Claude. It needs `ANTHROPIC_API_KEY` in `.env`; each request is a paid Anthropic API call.
+Turns a page into structured data with an AI model, either one you run yourself or Claude:
+
+- **A local model** (`LLM_BASE_URL` + `LLM_MODEL`): any OpenAI-compatible server, such as Ollama, vLLM, LM Studio or llama.cpp. Nothing leaves your machine and there's no per-request cost. See [Local AI](SELF_HOSTING.md#local-ai-ollama-and-other-openai-compatible-servers).
+- **Claude** (`ANTHROPIC_API_KEY`): the most accurate on long and messy pages; each request is a paid Anthropic API call.
 
 | `jsonOptions` field | Description |
 |---|---|
@@ -253,6 +259,22 @@ The default model is `claude-opus-5-5` (change with `LLM_MODEL`).
 | Other (zip, video, `.doc`/`.xls`/`.ppt`, GIF, SVG) | `422 UNSUPPORTED_FILE` |
 
 Files reached through a browser download (or behind a "checking your browser" page) are handled too.
+
+### Page cache
+
+minicrawl keeps the pages it fetches in its database, for `PAGE_CACHE_TTL_HOURS` (default 48). Send `maxAge` (ms) to reuse a cached copy that's younger than that, instead of fetching the page again:
+
+```json
+{ "url": "https://example.com", "maxAge": 3600000 }
+```
+
+- **Fresh formats every time.** What's cached is the fetched page (HTML, final URL, status, screenshot), so formats, `onlyMainContent` and AI extraction are computed for each request.
+- **The cache key** is the URL plus everything that changes the fetched page: `headers`, `waitFor`, screenshot mode, `proxy`, `engine`. Requests with different headers (cookies, auth) never share an entry.
+- **Response:** `metadata.cacheState` is `hit` or `miss` (present when `maxAge` > 0), and a hit also has `metadata.cachedAt`.
+- **Never cached:** pages with `actions`, error pages (status 400 and up), and anything for [zero-data-retention](ADMIN.md#team-settings) teams or requests.
+- **Crawls and batches** take `maxAge` in their scrape options. Crawling a site again within the hour costs no requests to it for pages that were already fetched.
+- `storeInCache: false` skips saving. `PAGE_CACHE=false` turns the cache off and empties it at the next cleanup.
+- **Where it's kept:** in minicrawl's own database, gzip-compressed. No external storage. Size it with `PAGE_CACHE_TTL_HOURS` and `PAGE_CACHE_MAX_BYTES` (largest page kept, compressed; default 5 MB).
 
 ### Proxies
 
@@ -396,7 +418,7 @@ With `scrapeOptions`, each item also has `markdown`, `metadata`, and so on. A re
 
 ## Extract
 
-AI extraction across several pages. It needs `ANTHROPIC_API_KEY`.
+AI extraction across several pages. It needs an AI provider (a local model or `ANTHROPIC_API_KEY`).
 
 ### `POST /v1/extract`
 
@@ -495,7 +517,8 @@ Firecrawl formats minicrawl can't produce yet are **refused with a 400**, so you
 | `search.sources` | `web`, `news`, `images` (news and images need SearXNG) |
 | `search.categories` | `github`, `research`, `pdf`, applied as search operators |
 | `search.includeDomains` / `excludeDomains` | Filter results by domain |
-| `mobile`, `parsers`, `blockAds`, `fastMode`, `removeBase64Images`, `maxAge`, `minAge`, `storeInCache`, `maxConcurrency`, `robotsUserAgent` | Accepted, no effect yet |
+| `maxAge`, `storeInCache` | The [page cache](#page-cache) |
+| `mobile`, `parsers`, `blockAds`, `fastMode`, `removeBase64Images`, `minAge`, `maxConcurrency`, `robotsUserAgent` | Accepted, no effect yet |
 
 Firecrawl-only endpoints are not available: agent, deep research, browser sessions, monitors, parse, and `crawl/params-preview`. Some of these are on the [roadmap](../README.md#%EF%B8%8F-roadmap).
 
@@ -530,7 +553,8 @@ Every error has the same shape:
 | 422 | `LLM_REFUSAL` / `LLM_OUTPUT_TOO_LARGE` | The model declined, or the result was too big |
 | 429 | `RATE_LIMITED` | Your team's requests per minute. Wait `Retry-After` seconds |
 | 429 | `LLM_RATE_LIMITED` | Anthropic rate limit; retry later |
-| 503 | `LLM_NOT_CONFIGURED` | `ANTHROPIC_API_KEY` missing or invalid |
+| 503 | `LLM_NOT_CONFIGURED` | No AI provider: set `LLM_BASE_URL` + `LLM_MODEL` or `ANTHROPIC_API_KEY`. Also: the local model server is unreachable, or the model isn't downloaded (`ollama pull <model>`) |
+| 504 | `LLM_TIMEOUT` | The local model took longer than `LLM_TIMEOUT_MS` |
 | 503 | `SEARCH_BLOCKED` | No SearXNG and DuckDuckGo refused |
 | 500 | `SCRAPE_FAILED` | Every engine failed (network error etc.). The message lists why |
 

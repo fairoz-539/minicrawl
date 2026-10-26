@@ -5,6 +5,7 @@ import { cleanHtml, extractAttributes, extractImages, extractLinks, extractMetad
 import { htmlToMarkdown } from "./markdown.js";
 import { hasStealthPool, pickProxy } from "./proxy.js";
 import { extractJson } from "./llm.js";
+import { DEFAULT_MAX_AGE_MS, PAGE_CACHE_ENABLED, cacheKey, decodePage } from "./page-cache.js";
 
 export const DEFAULT_SCRAPE_OPTIONS = {
   formats: ["markdown"],
@@ -65,20 +66,39 @@ async function fetchWithProxyStrategy(url, opts, timing, noStealth = false) {
 }
 
 /**
- * @param {{staggerMs?: number, noBrowser?: boolean, noStealth?: boolean}} config
+ * @param {{staggerMs?: number, noBrowser?: boolean, noStealth?: boolean, cache?: object, zdr?: boolean}} config
  *   noBrowser / noStealth: the team's policy (src/tenancy.js scrapePolicy)
+ *   cache: the page cache (src/page-cache.js); zdr: never read or write it
  * @returns {Promise<{doc: object, rawHtml: string, finalUrl: string, usage: object}>}
  *   rawHtml/finalUrl are returned separately so the crawler can discover
  *   links even when the caller didn't ask for those formats. usage is what
  *   the page cost, for metering: {pages, browserPages, ocrPages, aiInputTokens, aiOutputTokens}.
  */
-export async function scrapeURL(url, options = {}, { staggerMs, noBrowser = false, noStealth = false } = {}) {
+export async function scrapeURL(url, options = {}, { staggerMs, noBrowser = false, noStealth = false, cache = null, zdr = false } = {}) {
   const opts = { ...DEFAULT_SCRAPE_OPTIONS, ...options };
   const formats = new Set(opts.formats);
   const screenshot = formats.has("screenshot@fullPage") ? "fullPage" : formats.has("screenshot") ? "viewport" : null;
 
   const started = Date.now();
-  const page = await fetchWithProxyStrategy(url, { ...opts, screenshot, noBrowser }, { timeoutMs: opts.timeout, staggerMs }, noStealth);
+  // Page cache: reuse a fetched page younger than maxAge; store fresh ones.
+  const cacheable = !!cache && PAGE_CACHE_ENABLED && !zdr && !opts.actions?.length;
+  const maxAge = opts.maxAge ?? DEFAULT_MAX_AGE_MS;
+  const key = cacheable ? cacheKey(url, opts, screenshot) : null;
+  let page = null;
+  let cachedAt = null;
+  if (cacheable && maxAge > 0) {
+    const hit = await cache.get(key).catch(() => null);
+    if (hit && started - hit.createdAt <= maxAge) {
+      page = decodePage(hit.payload);
+      cachedAt = hit.createdAt;
+    }
+  }
+  if (!page) {
+    page = await fetchWithProxyStrategy(url, { ...opts, screenshot, noBrowser }, { timeoutMs: opts.timeout, staggerMs }, noStealth);
+    if (cacheable && opts.storeInCache !== false && page.statusCode < 400) {
+      await cache.put(key, url, page).catch(err => console.warn(`page cache write failed: ${err.message}`));
+    }
+  }
 
   const doc = {};
   const isHtml = page.kind === "html" || page.kind === "docx";
@@ -105,6 +125,8 @@ export async function scrapeURL(url, options = {}, { staggerMs, noBrowser = fals
     engine: page.engine,
     proxyUsed: page.proxyUsed,
     elapsedMs: Date.now() - started,
+    ...(cacheable && maxAge > 0 ? { cacheState: cachedAt ? "hit" : "miss" } : {}),
+    ...(cachedAt ? { cachedAt: new Date(cachedAt).toISOString() } : {}),
   };
   if (page.statusCode >= 400) doc.metadata.error = `HTTP ${page.statusCode}`;
 
@@ -115,8 +137,8 @@ export async function scrapeURL(url, options = {}, { staggerMs, noBrowser = fals
 
   const usage = {
     pages: 1,
-    browserPages: page.engine === "browser" ? 1 : 0,
-    ocrPages: doc.metadata.ocr ? doc.metadata.ocrPagesProcessed ?? doc.metadata.numPages ?? 1 : 0,
+    browserPages: page.engine === "browser" && !cachedAt ? 1 : 0,
+    ocrPages: doc.metadata.ocr && !cachedAt ? doc.metadata.ocrPagesProcessed ?? doc.metadata.numPages ?? 1 : 0,
   };
   const addTokens = llm => {
     const t = llmTokens(llm);

@@ -1,5 +1,6 @@
 // Local stand-ins for external services used in tests:
 //  - an Anthropic Messages API (SSE streaming) that records requests
+//  - an OpenAI-compatible chat completions server (what Ollama, vLLM, LM Studio serve)
 //  - an HTTP forward proxy that tags requests it relays
 import http from "node:http";
 import net from "node:net";
@@ -43,6 +44,51 @@ export function startMockAnthropic() {
     res.end();
   });
 
+  return new Promise(resolve =>
+    server.listen(0, "127.0.0.1", () =>
+      resolve({ url: `http://127.0.0.1:${server.address().port}`, state, close: () => new Promise(r => server.close(r)) }),
+    ),
+  );
+}
+
+/**
+ * OpenAI-compatible /v1/chat/completions. state:
+ *   reply          object (or fn(body) -> object) to answer with, as JSON text
+ *   rejectSchema   answer 400 to response_format json_schema (servers without structured outputs)
+ *   think          wrap the answer in <think>…</think> reasoning first
+ *   firstReply     answer this once (e.g. an incomplete object), then `reply`
+ *   status         force an HTTP status (e.g. 404 for an unknown model)
+ */
+export function startMockOpenAI() {
+  const state = { requests: [], reply: { ok: true }, rejectSchema: false, think: false, firstReply: null, status: 200 };
+  const server = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
+    state.requests.push({ path: req.url, headers: req.headers, body });
+    const send = (status, obj) => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify(obj));
+    };
+    if (req.url !== "/v1/chat/completions") return send(404, { error: { message: "not found" } });
+    if (state.status !== 200) return send(state.status, { error: { message: `model "${body.model}" not found` } });
+    if (state.rejectSchema && body.response_format?.type === "json_schema") {
+      return send(400, { error: { message: "response_format json_schema is not supported" } });
+    }
+    let answer;
+    if (state.firstReply) {
+      answer = state.firstReply;
+      state.firstReply = null;
+    } else answer = typeof state.reply === "function" ? state.reply(body) : state.reply;
+    const content = (state.think ? "<think>Let me look at {the page}…</think>\n" : "") + JSON.stringify(answer);
+    send(200, {
+      id: "chatcmpl-test",
+      object: "chat.completion",
+      model: body.model,
+      choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 50, completion_tokens: 7, total_tokens: 57 },
+    });
+  });
   return new Promise(resolve =>
     server.listen(0, "127.0.0.1", () =>
       resolve({ url: `http://127.0.0.1:${server.address().port}`, state, close: () => new Promise(r => server.close(r)) }),

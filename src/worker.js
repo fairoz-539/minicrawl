@@ -10,6 +10,7 @@ import { webSearch } from "./search.js";
 import { extractJson } from "./llm.js";
 import { mapLimit } from "./util.js";
 import { DATA_TTL_MS, TenancyError, checkPageQuota, domainAllowed, loadTeam, meter } from "./tenancy.js";
+import { PAGE_CACHE_TTL_MS } from "./page-cache.js";
 
 const CRAWL_PRIORITY = 20; // single scrapes would be 10; crawls yield to them
 
@@ -87,7 +88,7 @@ async function processScrape(ctx, job) {
   // crawl option `delay`: seconds to wait before each page.
   if (co.delay) await sleep(co.delay * 1000);
 
-  const { doc, rawHtml, finalUrl, usage } = await scrapeURL(url, sc.scrapeOptions, { ...ctx.scrapeConfig, ...sc.policy });
+  const { doc, rawHtml, finalUrl, usage } = await scrapeURL(url, sc.scrapeOptions, { ...ctx.scrapeConfig, ...sc.policy, zdr: !!sc.zdr });
   await meter(ctx, crawl.team_id, usage);
 
   // Redirected? Lock the landing URL too, so two URLs that redirect to the
@@ -142,7 +143,7 @@ async function processExtract(ctx, job) {
   const docs = (
     await mapLimit(list, 4, async url => {
       try {
-        const { doc, usage } = await scrapeURL(url, { ...scrapeOptions, formats: ["markdown"] }, { ...ctx.scrapeConfig, ...policy });
+        const { doc, usage } = await scrapeURL(url, { ...scrapeOptions, formats: ["markdown"] }, { ...ctx.scrapeConfig, ...policy, zdr: !!zdr });
         await meter(ctx, teamId, usage);
         if (!zdr) await ctx.store.recordSeen(doc.metadata.url, doc.metadata.title ?? null);
         return { url: doc.metadata.url, title: doc.metadata.title, markdown: doc.markdown };
@@ -218,6 +219,8 @@ export function startWorkers(ctx, { concurrency = 4, pollMs = 100, staleLockMs =
     try {
       const removed = await ctx.store.pruneExpired({ dataTtlMs: DATA_TTL_MS, seenTtlMs: SEEN_URLS_TTL_MS });
       await ctx.storage.tenancy?.prune({ auditTtlMs: AUDIT_TTL_MS });
+      const cached = await ctx.storage.cache?.prune({ ttlMs: PAGE_CACHE_TTL_MS });
+      if (cached) console.log(`cleanup: removed ${cached} cached pages`);
       if (removed.crawls || removed.jobs || removed.seenUrls) {
         console.log(`cleanup: removed ${removed.crawls} crawls, ${removed.jobs} jobs, ${removed.seenUrls} index URLs`);
       }

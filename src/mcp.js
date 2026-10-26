@@ -67,7 +67,7 @@ export function buildMcpServer(ctx, { version, baseUrl, tenant = SYSTEM_TENANT }
       description:
         "Fetch one URL and return its main content as clean markdown. Handles JavaScript-rendered pages, PDFs " +
         "(including scanned, via OCR), Word, Excel, PowerPoint and images. Optional: screenshot, browser actions " +
-        "(click/type/scroll before capture), and AI extraction to JSON (jsonOptions; needs ANTHROPIC_API_KEY on the server).",
+        "(click/type/scroll before capture), and AI extraction to JSON (jsonOptions; needs an AI provider on the server: ANTHROPIC_API_KEY or LLM_BASE_URL).",
       inputSchema: {
         url: z.string().describe("The page or file URL"),
         formats: z
@@ -192,7 +192,7 @@ export function buildMcpServer(ctx, { version, baseUrl, tenant = SYSTEM_TENANT }
       title: "Extract structured data with AI",
       description:
         "Read one or more pages (https://site.com/* expands to the site's most relevant pages) and return " +
-        "structured JSON matching a schema and/or prompt. Needs ANTHROPIC_API_KEY on the server.",
+        "structured JSON matching a schema and/or prompt. Needs an AI provider on the server (ANTHROPIC_API_KEY, or LLM_BASE_URL for a local model).",
       inputSchema: {
         urls: z.array(z.string()).min(1).max(10),
         prompt: z.string().optional(),

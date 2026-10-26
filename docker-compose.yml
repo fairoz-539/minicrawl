@@ -4,6 +4,11 @@
 #   docker compose pull && docker compose up -d  # prebuilt image (amd64/arm64)
 #   docker compose up -d --build                 # ...or build from this source
 #
+# Local AI (no API key, nothing leaves your machine): set LLM_BASE_URL and
+# LLM_MODEL in .env (see .env.example), then
+#   docker compose --profile local-ai up -d
+#   docker compose exec ollama ollama pull qwen3:8b
+#
 # API: http://localhost:3002   Docs: http://localhost:3002/docs
 name: minicrawl
 
@@ -40,6 +45,25 @@ services:
       SEARXNG_BASE_URL: http://searxng:8080/
     restart: unless-stopped
 
+  # Optional local model server for AI extraction (json/summary formats, /v1/extract).
+  # Only started with --profile local-ai. No published port: only minicrawl reaches it.
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["local-ai"]
+    volumes:
+      - ollama-models:/root/.ollama
+    environment:
+      # Ollama's default context (4k tokens) is too small for most pages.
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-16384}
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+    restart: unless-stopped
+    # With an NVIDIA GPU and the NVIDIA Container Toolkit, uncomment:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices: [{ driver: nvidia, count: all, capabilities: [gpu] }]
+
 volumes:
   minicrawl-data:
   searxng-cache:
+  ollama-models:
