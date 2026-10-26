@@ -42,7 +42,7 @@ const formatSchemas = {
   json: z
     .object({
       type: z.literal("json"),
-      schema: z.record(z.any()).optional(),
+      schema: z.record(z.string(), z.any()).optional(),
       prompt: z.string().max(10_000).optional(),
       model: z.string().optional().describe("Ignored: the server's LLM_MODEL is used"),
     })
@@ -93,7 +93,7 @@ export const formatsV2 = z
 export const scrapeOptionsV2 = z
   .object({
     formats: formatsV2.optional(),
-    headers: z.record(z.string()).optional(),
+    headers: z.record(z.string(), z.string()).optional(),
     includeTags: z.array(z.string()).optional(),
     excludeTags: z.array(z.string()).optional(),
     onlyMainContent: z.boolean().optional(),
@@ -156,7 +156,7 @@ export const batchBodyV2 = scrapeOptionsV2
   .extend({
     urls: z.array(z.string()).min(1).max(10_000),
     webhook: webhook.optional(),
-    appendToId: z.string().uuid().optional(),
+    appendToId: z.uuid().optional(),
     ignoreInvalidURLs: z.boolean().default(true),
     maxConcurrency: z.number().int().positive().optional().describe("Ignored: the team's concurrency limit applies"),
     zeroDataRetention: z.boolean().optional(),
@@ -205,7 +205,7 @@ export const mapBodyV2 = z
     useIndex: z.boolean().optional(),
     ignoreCache: z.boolean().optional(),
     location: z.any().optional(),
-    headers: z.record(z.string()).optional(),
+    headers: z.record(z.string(), z.string()).optional(),
     ...clientMeta,
   })
   .strict();
@@ -255,7 +255,7 @@ export const extractBodyV2 = z
     urls: z.array(z.string()).max(10).optional(),
     prompt: z.string().max(10_000).optional(),
     systemPrompt: z.string().max(10_000).optional(),
-    schema: z.record(z.any()).optional(),
+    schema: z.record(z.string(), z.any()).optional(),
     enableWebSearch: z.boolean().optional(),
     showSources: z.boolean().optional(),
     scrapeOptions: scrapeOptionsV2.optional(),

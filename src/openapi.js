@@ -5,7 +5,7 @@
 import express from "express";
 import { readFileSync } from "node:fs";
 import swaggerUi from "swagger-ui-dist";
-import { zodToJsonSchema } from "zod-to-json-schema";
+import { z } from "zod";
 import { batchBody, crawlBody, extractBody, mapBody, scrapeBody, searchBody } from "./schemas.js";
 import { batchBodyV2, crawlBodyV2, extractBodyV2, mapBodyV2, scrapeBodyV2, searchBodyV2 } from "./v2.js";
 import { keyCreateBody, orgUpdateBody, teamCreateBody, teamUpdateBody } from "./admin.js";
@@ -13,11 +13,15 @@ import { keyCreateBody, orgUpdateBody, teamCreateBody, teamUpdateBody } from "./
 const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
 const fromZod = schema => {
-  const json = zodToJsonSchema(schema, {
-    target: "openApi3",
-    $refStrategy: "none",
-    effectStrategy: "input",
-    pipeStrategy: "input",
+  const json = z.toJSONSchema(schema, {
+    target: "openapi-3.0",
+    io: "input",
+    unrepresentable: "any",
+    // z.number().int() implies the safe-integer range; it's noise in the docs.
+    override: ({ jsonSchema: s }) => {
+      if (s.maximum === Number.MAX_SAFE_INTEGER) delete s.maximum;
+      if (s.minimum === Number.MIN_SAFE_INTEGER) delete s.minimum;
+    },
   });
   delete json.$schema;
   return json;

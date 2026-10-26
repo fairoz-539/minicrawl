@@ -78,11 +78,11 @@ export function buildMcpServer(ctx, { version, baseUrl, tenant = SYSTEM_TENANT }
         waitFor: z.number().int().min(0).max(60_000).optional().describe("Extra milliseconds to wait after load"),
         timeout: z.number().int().min(1000).max(300_000).optional(),
         actions: z
-          .array(z.record(z.any()))
+          .array(z.record(z.string(), z.any()))
           .optional()
           .describe('Browser actions, e.g. [{"type":"click","selector":"#more"},{"type":"wait","milliseconds":1000}]'),
         jsonOptions: z
-          .object({ schema: z.record(z.any()).optional(), prompt: z.string().optional() })
+          .object({ schema: z.record(z.string(), z.any()).optional(), prompt: z.string().optional() })
           .optional()
           .describe("For the json format: a JSON Schema and/or a prompt"),
         maxChars: z.number().int().min(1000).optional().describe(`Truncate markdown to this many characters (default ${DEFAULT_MAX_CHARS})`),
@@ -196,7 +196,7 @@ export function buildMcpServer(ctx, { version, baseUrl, tenant = SYSTEM_TENANT }
       inputSchema: {
         urls: z.array(z.string()).min(1).max(10),
         prompt: z.string().optional(),
-        schema: z.record(z.any()).optional().describe("JSON Schema of the result"),
+        schema: z.record(z.string(), z.any()).optional().describe("JSON Schema of the result"),
         enableWebSearch: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
