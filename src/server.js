@@ -4,8 +4,8 @@
 //   POST   /v1/map
 //   POST   /v1/search
 //   POST   /v1/extract        GET /v1/extract/:id
+//   /admin/v1/*  teams, API keys, usage, audit log (src/admin.js)
 import express from "express";
-import { timingSafeEqual } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { openStorage } from "./storage.js";
@@ -20,12 +20,15 @@ import { hasBrowser } from "./browser.js";
 import { proxyPoolSizes } from "./proxy.js";
 import { mountDocs } from "./openapi.js";
 import { mountMcp } from "./mcp.js";
+import { mountAdmin } from "./admin.js";
+import { TenancyError, activeKeyCount, tenantAuth } from "./tenancy.js";
 import * as api from "./api.js";
 import { readFileSync } from "node:fs";
 
 const { version: VERSION } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
 function errorStatus(err) {
+  if (err instanceof TenancyError) return [err.status, err.code];
   if (err instanceof api.NotFoundError) return [404, err.code];
   if (err instanceof LLMError) return [err.status, err.code];
   if (err instanceof ActionError) return [422, err.code];
@@ -56,19 +59,6 @@ export function isWeakApiKey(key) {
   );
 }
 
-function authMiddleware(apiKeys) {
-  if (apiKeys.length === 0) return (_req, _res, next) => next();
-  const expected = apiKeys.map(k => Buffer.from(`Bearer ${k}`));
-  return (req, res, next) => {
-    const got = Buffer.from(req.get("authorization") ?? "");
-    // Check every key so the response time doesn't reveal which one matched.
-    let ok = false;
-    for (const e of expected) ok = (e.length === got.length && timingSafeEqual(e, got)) || ok;
-    if (ok) return next();
-    res.status(401).json({ success: false, code: "UNAUTHORIZED", error: "Unauthorized: invalid or missing API key" });
-  };
-}
-
 let featureCache = null;
 async function detectFeatures() {
   featureCache ??= {
@@ -86,6 +76,12 @@ async function detectFeatures() {
 export function createApp(ctx, { apiKeys = configuredApiKeys(), mode = "all" } = {}) {
   const app = express();
   app.disable("x-powered-by");
+  // Behind a reverse proxy, set TRUST_PROXY (e.g. "1" or "loopback") so
+  // req.ip is the client's address: IP allowlists and the audit log use it.
+  if (process.env.TRUST_PROXY) {
+    const t = process.env.TRUST_PROXY;
+    app.set("trust proxy", /^\d+$/.test(t) ? Number(t) : t === "true" ? true : t);
+  }
   app.use(express.json({ limit: "1mb" }));
 
   app.get("/", (req, res) =>
@@ -97,16 +93,18 @@ export function createApp(ctx, { apiKeys = configuredApiKeys(), mode = "all" } =
         "GET /health", "GET /docs", "GET /openapi.json",
         "POST /v1/scrape", "POST /v1/crawl", "GET /v1/crawl/{id}", "GET /v1/crawl/{id}/errors", "DELETE /v1/crawl/{id}",
         "POST /v1/map", "POST /v1/search", "POST /v1/extract", "GET /v1/extract/{id}", "POST /mcp",
+        "/admin/v1/{me,org,teams,keys,usage,audit}",
       ],
     }),
   );
 
-  app.get("/health", healthHandler(ctx, { auth: apiKeys.length > 0, mode }));
+  app.get("/health", healthHandler(ctx, { envKeys: apiKeys, mode }));
 
   mountDocs(app);
 
-  const auth = authMiddleware(apiKeys);
+  const auth = tenantAuth(ctx, { envKeys: apiKeys });
   mountMcp(app, ctx, { auth, version: VERSION });
+  mountAdmin(app, ctx, { auth: tenantAuth(ctx, { envKeys: apiKeys, meterRequests: false }) });
 
   const v1 = express.Router();
   v1.use(auth);
@@ -121,22 +119,27 @@ export function createApp(ctx, { apiKeys = configuredApiKeys(), mode = "all" } =
     }
   };
 
-  v1.post("/scrape", handle(req => api.scrape(ctx, req.body)));
-  v1.post("/crawl", handle(req => api.startCrawl(ctx, req.body, base(req))));
+  v1.post("/scrape", handle(req => api.scrape(ctx, req.body, req.tenant)));
+  v1.post("/crawl", handle(req => api.startCrawl(ctx, req.body, base(req), req.tenant)));
   v1.get(
     "/crawl/:id",
     handle(req =>
-      api.crawlStatus(ctx, req.params.id, { skip: Math.max(0, parseInt(req.query.skip ?? "0", 10) || 0), baseUrl: base(req) }),
+      api.crawlStatus(
+        ctx,
+        req.params.id,
+        { skip: Math.max(0, parseInt(req.query.skip ?? "0", 10) || 0), baseUrl: base(req) },
+        req.tenant,
+      ),
     ),
   );
-  v1.get("/crawl/:id/errors", handle(req => api.crawlErrors(ctx, req.params.id)));
+  v1.get("/crawl/:id/errors", handle(req => api.crawlErrors(ctx, req.params.id, req.tenant)));
   // The Firecrawl JS SDK's v1 checkCrawlErrors() sends DELETE; it only reads.
-  v1.delete("/crawl/:id/errors", handle(req => api.crawlErrors(ctx, req.params.id)));
-  v1.delete("/crawl/:id", handle(req => api.cancelCrawl(ctx, req.params.id)));
-  v1.post("/map", handle(req => api.map(ctx, req.body)));
-  v1.post("/search", handle(req => api.search(ctx, req.body)));
-  v1.post("/extract", handle(req => api.startExtract(ctx, req.body)));
-  v1.get("/extract/:id", handle(req => api.extractStatus(ctx, req.params.id)));
+  v1.delete("/crawl/:id/errors", handle(req => api.crawlErrors(ctx, req.params.id, req.tenant)));
+  v1.delete("/crawl/:id", handle(req => api.cancelCrawl(ctx, req.params.id, req.tenant)));
+  v1.post("/map", handle(req => api.map(ctx, req.body, req.tenant)));
+  v1.post("/search", handle(req => api.search(ctx, req.body, req.tenant)));
+  v1.post("/extract", handle(req => api.startExtract(ctx, req.body, req.tenant)));
+  v1.get("/extract/:id", handle(req => api.extractStatus(ctx, req.params.id, req.tenant)));
 
   app.use("/v1", v1);
   app.use((_req, res) => res.status(404).json({ success: false, error: "Not found" }));
@@ -156,6 +159,7 @@ export function createApp(ctx, { apiKeys = configuredApiKeys(), mode = "all" } =
       return res.status(400).json({ success: false, code: "BAD_REQUEST", error: "Invalid JSON body" });
     }
     const [status, code] = errorStatus(err);
+    for (const [k, v] of Object.entries(err?.headers ?? {})) res.set(k, v);
     res.status(status).json({ success: false, code, error: err?.message ?? "Internal error" });
   });
 
@@ -163,11 +167,13 @@ export function createApp(ctx, { apiKeys = configuredApiKeys(), mode = "all" } =
 }
 
 /** Liveness and capabilities. Public: it never includes secrets. */
-function healthHandler(ctx, { auth, mode = "all" }) {
+function healthHandler(ctx, { envKeys = [], mode = "all" }) {
   return async (_req, res) => {
     let db = true;
+    let auth = envKeys.length > 0;
     try {
       await ctx.storage.ping();
+      auth ||= mode !== "worker" && (await activeKeyCount(ctx)) > 0;
     } catch {
       db = false;
     }
@@ -185,6 +191,7 @@ function healthHandler(ctx, { auth, mode = "all" }) {
 
 export async function createContext({ dbPath } = {}) {
   const storage = await openStorage({ dbPath });
+  await storage.tenancy.ensureDefaults();
   return { storage, queue: storage.queue, store: storage.store, scrapeConfig: {} };
 }
 
@@ -200,25 +207,32 @@ export async function start({
   dbPath,
 } = {}) {
   if (!MODES.includes(mode)) throw new StartupError(`Unknown MODE "${mode}": use all, api or worker`);
-  // The Docker image sets REQUIRE_API_KEY=true so a public deployment can't
-  // accidentally run open. ALLOW_NO_AUTH=true is the explicit opt-out.
-  if (mode !== "worker" && process.env.REQUIRE_API_KEY === "true" && process.env.ALLOW_NO_AUTH !== "true") {
-    const keys = configuredApiKeys();
-    if (keys.length === 0) {
-      throw new StartupError(
-        "No API key configured. Run scripts/setup (or set API_KEY / API_KEYS=key1,key2 in .env), " +
-          "or set ALLOW_NO_AUTH=true to run without authentication.",
-      );
-    }
-    const weak = keys.filter(isWeakApiKey);
-    if (weak.length > 0) {
-      throw new StartupError(
-        `${weak.length} API key(s) look like a placeholder or are too short (need 16+ characters). ` +
-          "Generate your own: run scripts/setup, or `openssl rand -hex 32`.",
-      );
-    }
+  const keys = configuredApiKeys();
+  const weak = keys.filter(isWeakApiKey);
+  if (mode !== "worker" && process.env.REQUIRE_API_KEY === "true" && process.env.ALLOW_NO_AUTH !== "true" && weak.length > 0) {
+    throw new StartupError(
+      `${weak.length} API key(s) look like a placeholder or are too short (need 16+ characters). ` +
+        "Generate your own: run scripts/setup, or `openssl rand -hex 32`.",
+    );
   }
   const ctx = await createContext({ dbPath });
+  // The Docker image sets REQUIRE_API_KEY=true so a public deployment can't
+  // accidentally run open: it needs a key in .env or one created with the
+  // admin CLI. ALLOW_NO_AUTH=true is the explicit opt-out.
+  if (
+    mode !== "worker" &&
+    process.env.REQUIRE_API_KEY === "true" &&
+    process.env.ALLOW_NO_AUTH !== "true" &&
+    keys.length === 0 &&
+    (await ctx.storage.tenancy.countActiveKeys()) === 0
+  ) {
+    await ctx.storage.close();
+    throw new StartupError(
+      "No API key configured. Run scripts/setup (or set API_KEY / API_KEYS=key1,key2 in .env), " +
+        "create one with the admin CLI (node src/admin-cli.js keys create --name admin --role owner), " +
+        "or set ALLOW_NO_AUTH=true to run without authentication.",
+    );
+  }
   const pool =
     mode !== "api" && workers > 0
       ? startWorkers(ctx, {
@@ -232,7 +246,7 @@ export async function start({
   if (mode === "worker") {
     app = express();
     app.disable("x-powered-by");
-    app.get("/health", healthHandler(ctx, { auth: false, mode }));
+    app.get("/health", healthHandler(ctx, { mode }));
   } else {
     app = createApp(ctx, { mode });
   }
@@ -265,7 +279,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     console.error(`minicrawl: ${err.message}`);
     process.exit(1);
   }
-  const keys = configuredApiKeys().length;
+  const keys = configuredApiKeys().length + (await instance.ctx.storage.tenancy.countActiveKeys());
   console.log(
     instance.mode === "worker"
       ? `minicrawl ${VERSION} worker (${process.env.WORKERS ?? 4} workers, ${instance.ctx.storage.kind}) - health on :${instance.port}/health`

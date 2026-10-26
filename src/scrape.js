@@ -17,14 +17,21 @@ export const DEFAULT_SCRAPE_OPTIONS = {
   proxy: "auto",
 };
 
+/** Sum the per-call token usage extractJson reports. */
+export const llmTokens = (usage = []) => ({
+  aiInputTokens: usage.reduce((n, u) => n + (u?.inputTokens ?? 0), 0),
+  aiOutputTokens: usage.reduce((n, u) => n + (u?.outputTokens ?? 0), 0),
+});
+
 const BLOCKED_STATUSES = new Set([401, 403, 407, 429, 503]);
 
 /**
  * proxy "basic": basic pool (or direct). "stealth": stealth pool only.
  * "auto": basic first; if the site blocks it, retry once through the stealth
  * pool (when STEALTH_PROXY_URLS is configured). Same contract as Firecrawl.
+ * noStealth (the team has the stealth proxy disabled) keeps "auto" on basic.
  */
-async function fetchWithProxyStrategy(url, opts, timing) {
+async function fetchWithProxyStrategy(url, opts, timing, noStealth = false) {
   const attempt = tier => {
     const proxy = pickProxy(tier);
     return scrapeWithWaterfall(url, { ...opts, proxy }, timing).then(page => ({ ...page, proxyUsed: tier }));
@@ -36,7 +43,7 @@ async function fetchWithProxyStrategy(url, opts, timing) {
     }
     return attempt("stealth");
   }
-  if (opts.proxy === "basic" || !hasStealthPool()) return attempt("basic");
+  if (opts.proxy === "basic" || noStealth || !hasStealthPool()) return attempt("basic");
 
   const started = Date.now();
   try {
@@ -52,17 +59,20 @@ async function fetchWithProxyStrategy(url, opts, timing) {
 }
 
 /**
- * @returns {Promise<{doc: object, rawHtml: string, finalUrl: string}>}
+ * @param {{staggerMs?: number, noBrowser?: boolean, noStealth?: boolean}} config
+ *   noBrowser / noStealth: the team's policy (src/tenancy.js scrapePolicy)
+ * @returns {Promise<{doc: object, rawHtml: string, finalUrl: string, usage: object}>}
  *   rawHtml/finalUrl are returned separately so the crawler can discover
- *   links even when the caller didn't ask for those formats.
+ *   links even when the caller didn't ask for those formats. usage is what
+ *   the page cost, for metering: {pages, browserPages, ocrPages, aiInputTokens, aiOutputTokens}.
  */
-export async function scrapeURL(url, options = {}, { staggerMs } = {}) {
+export async function scrapeURL(url, options = {}, { staggerMs, noBrowser = false, noStealth = false } = {}) {
   const opts = { ...DEFAULT_SCRAPE_OPTIONS, ...options };
   const formats = new Set(opts.formats);
   const screenshot = formats.has("screenshot@fullPage") ? "fullPage" : formats.has("screenshot") ? "viewport" : null;
 
   const started = Date.now();
-  const page = await fetchWithProxyStrategy(url, { ...opts, screenshot }, { timeoutMs: opts.timeout, staggerMs });
+  const page = await fetchWithProxyStrategy(url, { ...opts, screenshot, noBrowser }, { timeoutMs: opts.timeout, staggerMs }, noStealth);
 
   const doc = {};
   const isHtml = page.kind === "html" || page.kind === "docx";
@@ -95,15 +105,21 @@ export async function scrapeURL(url, options = {}, { staggerMs } = {}) {
     warnings.push("Page looks JavaScript-rendered; content may be incomplete (no browser engine available).");
   }
 
+  const usage = {
+    pages: 1,
+    browserPages: page.engine === "browser" ? 1 : 0,
+    ocrPages: doc.metadata.ocr ? doc.metadata.ocrPagesProcessed ?? doc.metadata.numPages ?? 1 : 0,
+  };
   if (formats.has("json")) {
-    const { data, warnings: w } = await extractJson(
+    const { data, warnings: w, usage: llm } = await extractJson(
       [{ url: page.url, title: doc.metadata.title, markdown }],
       opts.jsonOptions ?? {},
     );
     doc.json = data;
     warnings.push(...w);
+    Object.assign(usage, llmTokens(llm));
   }
   if (warnings.length) doc.warning = warnings.join(" ");
 
-  return { doc, rawHtml: page.kind === "html" ? page.html : "", finalUrl: page.url };
+  return { doc, rawHtml: page.kind === "html" ? page.html : "", finalUrl: page.url, usage };
 }

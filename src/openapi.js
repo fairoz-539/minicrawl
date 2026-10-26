@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import swaggerUi from "swagger-ui-dist";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { crawlBody, extractBody, mapBody, scrapeBody, searchBody } from "./schemas.js";
+import { keyCreateBody, orgUpdateBody, teamCreateBody, teamUpdateBody } from "./admin.js";
 
 const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
@@ -26,13 +27,28 @@ const json = (schema, example) => ({ "application/json": { schema, ...(example ?
 const body = (name, example) => ({ required: true, content: json(ref(name), example) });
 const ok = (description, schema, example) => ({ description, content: json(schema, example) });
 
+const TEAM_403 =
+  "`FORBIDDEN` (role or key scopes), `FEATURE_DISABLED`, `DOMAIN_NOT_ALLOWED` (organization domain policy), " +
+  "`IP_NOT_ALLOWED` (team IP allowlist), `TEAM_DISABLED`";
 const ERRORS = {
   400: { description: "Invalid request body (`BAD_REQUEST`)", content: json(ref("Error")) },
-  401: { description: "Missing or wrong API key (`UNAUTHORIZED`)", content: json(ref("Error")) },
+  401: { description: "Missing, wrong, revoked or expired API key (`UNAUTHORIZED`)", content: json(ref("Error")) },
+  402: { description: "`QUOTA_EXCEEDED`: the team's daily or monthly pages are used up (see Retry-After)", content: json(ref("Error")) },
+  403: { description: TEAM_403, content: json(ref("Error")) },
+  429: { description: "`RATE_LIMITED`: the team's requests per minute (see Retry-After)", content: json(ref("Error")) },
+};
+const ADMIN_ERRORS = {
+  400: ERRORS[400],
+  401: ERRORS[401],
+  403: { description: "`FORBIDDEN`: your role can't do this (see the role table in docs/ADMIN.md)", content: json(ref("Error")) },
+  404: { description: "No such team or key in your organization", content: json(ref("Error")) },
 };
 const scrapeErrors = {
   ...ERRORS,
-  403: { description: "`BLOCKED_URL` (private address) or `BLOCKED_BY_SITE` (bot protection)", content: json(ref("Error")) },
+  403: {
+    description: `\`BLOCKED_URL\` (private address), \`BLOCKED_BY_SITE\` (bot protection), ${TEAM_403}`,
+    content: json(ref("Error")),
+  },
   408: { description: "`SCRAPE_TIMEOUT`", content: json(ref("Error")) },
   422: {
     description: "`UNSUPPORTED_FILE`, `ACTION_FAILED`, `NO_BROWSER`, `NO_STEALTH_PROXY`, `LLM_REFUSAL`",
@@ -42,6 +58,7 @@ const scrapeErrors = {
 };
 const notFound = { 404: { description: "Unknown id", content: json(ref("Error")) } };
 const idParam = { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } };
+const teamIdParam = { name: "id", in: "path", required: true, schema: { type: "string" }, description: "Team id (\"default\" for the default team)" };
 
 const documentSchema = {
   type: "object",
@@ -113,13 +130,17 @@ export function buildSpec() {
     },
     servers: [{ url: "/" }],
     components: {
-      securitySchemes: { bearerAuth: { type: "http", scheme: "bearer", description: "Your API_KEY" } },
+      securitySchemes: { bearerAuth: { type: "http", scheme: "bearer", description: "API_KEY from .env, or a key from POST /admin/v1/keys" } },
       schemas: {
         ScrapeRequest: fromZod(scrapeBody),
         CrawlRequest: fromZod(crawlBody),
         MapRequest: fromZod(mapBody),
         SearchRequest: fromZod(searchBody),
         ExtractRequest: fromZod(extractBody),
+        TeamCreate: fromZod(teamCreateBody),
+        TeamUpdate: fromZod(teamUpdateBody),
+        OrgUpdate: fromZod(orgUpdateBody),
+        KeyCreate: fromZod(keyCreateBody),
         Document: documentSchema,
         Error: {
           type: "object",
@@ -140,6 +161,7 @@ export function buildSpec() {
       { name: "Search", description: "Web search via SearXNG" },
       { name: "Extract", description: "AI extraction with Claude (needs ANTHROPIC_API_KEY)" },
       { name: "System" },
+      { name: "Admin", description: "Teams, API keys, limits, usage and the audit log (see docs/ADMIN.md)" },
     ],
     paths: {
       "/health": {
@@ -329,6 +351,94 @@ export function buildSpec() {
             ...ERRORS,
             ...notFound,
           },
+        },
+      },
+      "/admin/v1/me": {
+        get: {
+          tags: ["Admin"],
+          summary: "The calling key: team, role, scopes, limits",
+          responses: { 200: ok("Your identity", { type: "object" }, { success: true, data: { orgId: "default", teamId: "default", teamName: "default", role: "owner", scopes: null, keyId: null, limits: {}, settings: {} } }), ...ADMIN_ERRORS },
+        },
+      },
+      "/admin/v1/org": {
+        get: { tags: ["Admin"], summary: "Organization and its domain policy (admin, owner)", responses: { 200: ok("Organization", { type: "object" }), ...ADMIN_ERRORS } },
+        patch: {
+          tags: ["Admin"],
+          summary: "Change the organization's name or domain allow/deny lists (owner)",
+          requestBody: body("OrgUpdate", { settings: { denyDomains: ["internal.example.com"] } }),
+          responses: { 200: ok("Updated", { type: "object" }), ...ADMIN_ERRORS },
+        },
+      },
+      "/admin/v1/teams": {
+        get: { tags: ["Admin"], summary: "Teams (owner: all; others: their own)", responses: { 200: ok("Teams", { type: "object" }), ...ADMIN_ERRORS } },
+        post: {
+          tags: ["Admin"],
+          summary: "Create a team with limits and settings (owner)",
+          requestBody: body("TeamCreate", {
+            name: "research",
+            limits: { concurrency: 4, requestsPerMinute: 120, pagesPerDay: 5000, pagesPerMonth: 100000, maxCrawlPages: 1000, features: { stealthProxy: false } },
+            settings: { zdr: false, retentionHours: 72, ipAllowlist: ["10.0.0.0/8"] },
+          }),
+          responses: { 201: ok("Created", { type: "object" }), 409: { description: "A team with this name exists (`CONFLICT`)", content: json(ref("Error")) }, ...ADMIN_ERRORS },
+        },
+      },
+      "/admin/v1/teams/{id}": {
+        get: { tags: ["Admin"], summary: "One team", parameters: [teamIdParam], responses: { 200: ok("Team", { type: "object" }), ...ADMIN_ERRORS } },
+        patch: {
+          tags: ["Admin"],
+          summary: "Change a team: name and settings (admin of the team, owner); limits and disabled (owner)",
+          description: "Fields you send replace the stored ones; null removes a limit or setting.",
+          parameters: [teamIdParam],
+          requestBody: body("TeamUpdate", { limits: { pagesPerDay: 10000, requestsPerMinute: null } }),
+          responses: { 200: ok("Updated", { type: "object" }), ...ADMIN_ERRORS },
+        },
+      },
+      "/admin/v1/keys": {
+        get: {
+          tags: ["Admin"],
+          summary: "API keys (admin: their team; owner: every team). Keys themselves are never returned.",
+          parameters: [{ name: "teamId", in: "query", schema: { type: "string" } }],
+          responses: { 200: ok("Keys", { type: "object" }), ...ADMIN_ERRORS },
+        },
+        post: {
+          tags: ["Admin"],
+          summary: "Create an API key (shown once in the response)",
+          requestBody: body("KeyCreate", { name: "ci-pipeline", role: "member", scopes: ["scrape", "crawl"], expiresInDays: 90 }),
+          responses: { 201: ok("Created", { type: "object" }, { success: true, key: "mc_…", data: { id: "…", prefix: "mc_AbCdEfGh", role: "member" } }), ...ADMIN_ERRORS },
+        },
+      },
+      "/admin/v1/keys/{id}": {
+        delete: {
+          tags: ["Admin"],
+          summary: "Revoke an API key",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { 200: ok("Revoked", { type: "object" }), ...ADMIN_ERRORS },
+        },
+      },
+      "/admin/v1/usage": {
+        get: {
+          tags: ["Admin"],
+          summary: "Usage per team and day: requests, pages, browserPages, ocrPages, aiInputTokens, aiOutputTokens, searches",
+          parameters: [
+            { name: "teamId", in: "query", schema: { type: "string" } },
+            { name: "from", in: "query", schema: { type: "string", format: "date" }, description: "Default: first day of this month (UTC)" },
+            { name: "to", in: "query", schema: { type: "string", format: "date" }, description: "Default: today (UTC)" },
+          ],
+          responses: { 200: ok("Usage", { type: "object" }), ...ADMIN_ERRORS },
+        },
+      },
+      "/admin/v1/audit": {
+        get: {
+          tags: ["Admin"],
+          summary: "Audit log, newest first (admin: their team; owner: the organization)",
+          parameters: [
+            { name: "teamId", in: "query", schema: { type: "string" } },
+            { name: "since", in: "query", schema: { type: "integer" }, description: "Epoch milliseconds" },
+            { name: "beforeId", in: "query", schema: { type: "integer" }, description: "Paging: nextBeforeId from the previous page" },
+            { name: "limit", in: "query", schema: { type: "integer", default: 100, maximum: 10000 } },
+            { name: "format", in: "query", schema: { type: "string", enum: ["json", "jsonl"] }, description: "jsonl: one event per line, for SIEM import" },
+          ],
+          responses: { 200: ok("Events", { type: "object" }), ...ADMIN_ERRORS },
         },
       },
     },

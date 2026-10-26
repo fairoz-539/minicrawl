@@ -13,6 +13,7 @@ This guide gets minicrawl running on your own computer or server. The recommende
 - [Updating, backups, logs](#operations)
 - [Sizing and tuning](#sizing-and-tuning)
 - [Scale mode](#scale-mode-postgres-many-workers): Postgres, separate API and worker containers, Helm
+- [Teams, keys and quotas](#teams-keys-and-quotas)
 - [SDK compatibility](#sdk-compatibility)
 - [Troubleshooting](#troubleshooting)
 - [Uninstalling](#uninstalling)
@@ -376,6 +377,17 @@ Useful values: `api.replicas`, `worker.replicas`, `worker.concurrency`, `worker.
 | `PG_SCHEMA` | `public` | Postgres schema for minicrawl's tables |
 
 Workers don't need an API key, and only API containers need a published port. Back up the database with your usual Postgres tooling (`pg_dump`).
+
+## Teams, keys and quotas
+
+One minicrawl can serve many teams. Each team gets its own API keys, roles, quotas, rate limit, feature switches, usage numbers and an audit trail. The `API_KEY` in `.env` stays an owner key, so nothing changes until you create a team.
+
+```bash
+docker compose exec minicrawl node src/admin-cli.js teams create research --limits '{"pagesPerDay":5000}'
+docker compose exec minicrawl node src/admin-cli.js keys create --team research --name research-app
+```
+
+The full guide covers roles, limits, zero data retention, IP allowlists, domain policies and SIEM export: **[docs/ADMIN.md](ADMIN.md)**. Behind a reverse proxy, also set `TRUST_PROXY=1`.
 
 ## SDK compatibility
 

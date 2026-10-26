@@ -8,6 +8,7 @@
 //  - a per-crawl visited set used as the URL lock (Redis SADD in Firecrawl)
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
+import { TenancyStore } from "./tenancy-store.js";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS jobs (
@@ -23,7 +24,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   result      TEXT,
   error       TEXT,
   created_at  INTEGER NOT NULL,
-  finished_at INTEGER
+  finished_at INTEGER,
+  team_id     TEXT NOT NULL DEFAULT 'default',
+  expires_at  INTEGER                    -- ms; NULL = DATA_TTL_HOURS after created_at
 );
 CREATE INDEX IF NOT EXISTS jobs_queued_idx ON jobs (priority, created_at) WHERE status = 'queued';
 CREATE INDEX IF NOT EXISTS jobs_active_idx ON jobs (locked_at) WHERE status = 'active';
@@ -34,7 +37,9 @@ CREATE TABLE IF NOT EXISTS crawls (
   status      TEXT NOT NULL DEFAULT 'scraping', -- scraping | completed | cancelled | failed
   data        TEXT NOT NULL,
   created_at  INTEGER NOT NULL,
-  finished_at INTEGER
+  finished_at INTEGER,
+  team_id     TEXT NOT NULL DEFAULT 'default',
+  expires_at  INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS visited (
@@ -59,14 +64,65 @@ CREATE TABLE IF NOT EXISTS seen_urls (
 ) WITHOUT ROWID;
 `;
 
+// Same tables as migrations/postgres/002_tenancy.sql.
+const TENANCY_SCHEMA = `
+CREATE TABLE IF NOT EXISTS orgs (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, settings TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS teams (
+  id TEXT PRIMARY KEY, org_id TEXT NOT NULL REFERENCES orgs (id), name TEXT NOT NULL,
+  limits TEXT NOT NULL DEFAULT '{}', settings TEXT NOT NULL DEFAULT '{}',
+  max_concurrency INTEGER, disabled INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS teams_org_name_idx ON teams (org_id, name);
+CREATE TABLE IF NOT EXISTS api_keys (
+  id TEXT PRIMARY KEY, team_id TEXT NOT NULL REFERENCES teams (id), name TEXT NOT NULL,
+  prefix TEXT NOT NULL, hash TEXT NOT NULL UNIQUE, role TEXT NOT NULL, scopes TEXT,
+  created_by TEXT, created_at INTEGER NOT NULL, expires_at INTEGER, last_used_at INTEGER, revoked_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS api_keys_team_idx ON api_keys (team_id);
+CREATE TABLE IF NOT EXISTS usage_daily (
+  team_id TEXT NOT NULL, day TEXT NOT NULL, metric TEXT NOT NULL, amount INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (team_id, day, metric)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS rate_counters (
+  bucket TEXT NOT NULL, window_start INTEGER NOT NULL, n INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (bucket, window_start)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY, at INTEGER NOT NULL, org_id TEXT, team_id TEXT, key_id TEXT, actor TEXT,
+  action TEXT NOT NULL, target TEXT, ip TEXT, status INTEGER, details TEXT
+);
+CREATE INDEX IF NOT EXISTS audit_org_at_idx ON audit_log (org_id, at);
+CREATE INDEX IF NOT EXISTS audit_team_at_idx ON audit_log (team_id, at);
+`;
+
+/** Databases created before 1.3 lack the team and expiry columns. */
+function upgradeColumns(db) {
+  for (const table of ["jobs", "crawls"]) {
+    const cols = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name));
+    if (!cols.has("team_id")) db.exec(`ALTER TABLE ${table} ADD COLUMN team_id TEXT NOT NULL DEFAULT 'default'`);
+    if (!cols.has("expires_at")) db.exec(`ALTER TABLE ${table} ADD COLUMN expires_at INTEGER`);
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS jobs_team_active_idx ON jobs (team_id) WHERE status = 'active'");
+}
+
 export function openDb(path = process.env.DB_PATH ?? "minicrawl.db") {
   const db = new DatabaseSync(path);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA synchronous = NORMAL;");
   db.exec(SCHEMA);
+  upgradeColumns(db);
+  db.exec(TENANCY_SCHEMA);
   return db;
 }
 
 const parse = s => (s == null ? null : JSON.parse(s));
+
+/** Excludes teams whose running jobs already reach limits.concurrency. Shared with src/db-postgres.js. */
+export const CLAIM_SKIP_FULL_TEAMS = `team_id NOT IN (
+  SELECT a.team_id FROM jobs a JOIN teams t ON t.id = a.team_id
+  WHERE a.status = 'active' AND t.max_concurrency IS NOT NULL
+  GROUP BY a.team_id, t.max_concurrency HAVING COUNT(*) >= t.max_concurrency)`;
 
 function rowToJob(row) {
   if (!row) return null;
@@ -79,13 +135,14 @@ export class Queue {
     this.seq = 0;
     this.stmts = {
       add: db.prepare(
-        "INSERT INTO jobs (id, type, priority, data, group_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO jobs (id, type, priority, data, group_id, created_at, team_id, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       ),
       // SQLite has a single writer, so this UPDATE ... RETURNING is the
-      // equivalent of Postgres' FOR UPDATE SKIP LOCKED claim.
+      // equivalent of Postgres' FOR UPDATE SKIP LOCKED claim. Teams already
+      // running their concurrency limit are skipped.
       claim: db.prepare(`
         UPDATE jobs SET status = 'active', lock = ?, locked_at = ?
-        WHERE id = (SELECT id FROM jobs WHERE status = 'queued'
+        WHERE id = (SELECT id FROM jobs WHERE status = 'queued' AND ${CLAIM_SKIP_FULL_TEAMS}
                     ORDER BY priority ASC, created_at ASC LIMIT 1)
         RETURNING *`),
       renew: db.prepare("UPDATE jobs SET locked_at = ? WHERE id = ? AND lock = ? AND status = 'active'"),
@@ -119,10 +176,10 @@ export class Queue {
     };
   }
 
-  async add({ type, data, priority = 10, groupId = null, id = randomUUID() }) {
+  async add({ type, data, priority = 10, groupId = null, id = randomUUID(), teamId = "default", expiresAt = null }) {
     // created_at gets a sub-millisecond tiebreaker so FIFO order is stable.
     const createdAt = Date.now() * 1000 + (this.seq++ % 1000);
-    this.stmts.add.run(id, type, priority, JSON.stringify(data), groupId, createdAt);
+    this.stmts.add.run(id, type, priority, JSON.stringify(data), groupId, createdAt, teamId, expiresAt);
     return id;
   }
 
@@ -182,7 +239,7 @@ export class CrawlStore {
   constructor(db) {
     this.db = db;
     this.stmts = {
-      create: db.prepare("INSERT INTO crawls (id, data, created_at) VALUES (?, ?, ?)"),
+      create: db.prepare("INSERT INTO crawls (id, data, created_at, team_id, expires_at) VALUES (?, ?, ?, ?, ?)"),
       get: db.prepare("SELECT * FROM crawls WHERE id = ?"),
       save: db.prepare("UPDATE crawls SET data = ? WHERE id = ?"),
       setStatus: db.prepare(
@@ -207,8 +264,8 @@ export class CrawlStore {
     };
   }
 
-  async create(id, crawl) {
-    this.stmts.create.run(id, JSON.stringify(crawl), Date.now());
+  async create(id, crawl, { teamId = "default", expiresAt = null } = {}) {
+    this.stmts.create.run(id, JSON.stringify(crawl), Date.now(), teamId, expiresAt);
   }
 
   async get(id) {
@@ -259,8 +316,9 @@ export class CrawlStore {
   /**
    * Delete data past its expiry, in bounded batches so the queue isn't
    * locked for long. Running crawls are never touched.
-   *  - crawls (and their jobs, visited set, robots log) older than dataTtlMs
-   *  - finished standalone jobs (extracts) older than dataTtlMs
+   *  - crawls (and their jobs, visited set, robots log) past their expires_at,
+   *    or older than dataTtlMs when they have none
+   *  - finished standalone jobs (extracts), the same way
    *  - URL-index entries (used by /map) not seen for seenTtlMs
    * A TTL of 0 keeps that data forever.
    * @returns {{crawls: number, jobs: number, seenUrls: number}}
@@ -270,11 +328,13 @@ export class CrawlStore {
     const db = this.db;
     db.exec("BEGIN IMMEDIATE");
     try {
-      if (dataTtlMs > 0) {
-        const cutoff = now - dataTtlMs;
+      {
+        // dataTtlMs 0: rows without their own expiry are kept forever.
+        const cutoff = dataTtlMs > 0 ? now - dataTtlMs : -1;
         const ids = db
-          .prepare("SELECT id FROM crawls WHERE status != 'scraping' AND created_at < ? LIMIT ?")
-          .all(cutoff, batch)
+          .prepare(`SELECT id FROM crawls WHERE status != 'scraping'
+                    AND (expires_at < ? OR (expires_at IS NULL AND created_at < ?)) LIMIT ?`)
+          .all(now, cutoff, batch)
           .map(r => r.id);
         for (const id of ids) {
           out.jobs += db.prepare("DELETE FROM jobs WHERE group_id = ?").run(id).changes;
@@ -285,8 +345,9 @@ export class CrawlStore {
         // jobs.created_at is stored in ms × 1000 (see Queue.add).
         out.jobs += db
           .prepare(`DELETE FROM jobs WHERE rowid IN (
-            SELECT rowid FROM jobs WHERE group_id IS NULL AND status IN ('completed', 'failed') AND created_at < ? LIMIT ?)`)
-          .run(cutoff * 1000, batch * 10).changes;
+            SELECT rowid FROM jobs WHERE group_id IS NULL AND status IN ('completed', 'failed')
+            AND (expires_at < ? OR (expires_at IS NULL AND created_at < ?)) LIMIT ?)`)
+          .run(now, cutoff * 1000, batch * 10).changes;
       }
       if (seenTtlMs > 0) {
         out.seenUrls = db
@@ -315,6 +376,14 @@ export function openSqliteStorage(path) {
     kind: "sqlite",
     queue: new Queue(db),
     store: new CrawlStore(db),
+    tenancy: new TenancyStore({
+      async all(sql, params) {
+        return db.prepare(sql).all(...params);
+      },
+      async run(sql, params) {
+        return Number(db.prepare(sql).run(...params).changes);
+      },
+    }),
     async ping() {
       db.prepare("SELECT 1").get();
     },

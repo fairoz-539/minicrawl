@@ -4,6 +4,37 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-27
+
+### Added
+
+- **Teams and API keys:** one installation serves many teams (organization → teams → keys). Created keys (`mc_…`) are stored only as a SHA-256 hash, shown once, and can have an expiry. Keys are revocable.
+- **Roles and scopes:** owner, admin, member and viewer, plus optional per-key scopes (`scrape`, `crawl`, `map`, `search`, `extract`). REST and MCP enforce the same rules.
+- **Team isolation:** crawls and extract jobs belong to a team. Other teams get `404`.
+- **Team limits:**
+  - `concurrency` (enforced in the job queue, so other teams keep running)
+  - `requestsPerMinute` (`429 RATE_LIMITED`)
+  - `pagesPerDay` / `pagesPerMonth` (`402 QUOTA_EXCEEDED`; running crawls stop)
+  - `maxCrawlPages`
+  - feature switches for AI, browser, stealth proxy and search (`403 FEATURE_DISABLED`)
+- **Usage metering** per team and day: requests, pages, browser pages, OCR pages, AI input/output tokens, searches.
+- **Team settings:**
+  - result retention (`retentionHours`)
+  - **zero data retention** (nothing added to the map index; results deleted within `ZDR_RETENTION_MINUTES`)
+  - **IP allowlists** (`403 IP_NOT_ALLOWED`)
+- **Organization domain policy:** allow/deny lists (`403 DOMAIN_NOT_ALLOWED`); crawls and extracts skip blocked links.
+- **Audit log** of team, key and org changes, optionally of every API call (`AUDIT_ALL_REQUESTS`). Read it as JSON or JSON lines, print it to stdout (`AUDIT_LOG_STDOUT`) or stream it to a signed webhook (`AUDIT_WEBHOOK_URL`) for SIEM tools.
+- **Admin API** `/admin/v1`: me, org, teams, keys, usage, audit. All endpoints are documented in `/docs`.
+- **Admin CLI** (`node src/admin-cli.js`, `npm run admin`): teams, keys, usage and audit straight in the database. Use it for the first key.
+- `TRUST_PROXY` for correct client IPs behind a reverse proxy.
+- `docs/ADMIN.md`.
+
+### Changed
+
+- `API_KEY` / `API_KEYS` from `.env` act as owners of the `default` team. Existing data belongs to that team; nothing changes for existing installs.
+- `REQUIRE_API_KEY` is also satisfied by a key created with the admin CLI.
+- Databases are upgraded automatically (SQLite in place; Postgres migration `002_tenancy.sql`).
+
 ## [1.2.0] - 2026-10-26
 
 ### Added

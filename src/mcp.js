@@ -1,11 +1,13 @@
 // Model Context Protocol endpoint (POST /mcp, Streamable HTTP, stateless).
 // Lets AI agents (Claude Code, Cursor, VS Code, Claude Desktop via the
 // minicrawl-mcp bridge) use minicrawl as tools. Every tool calls the same
-// operations as the REST API (src/api.js) and is protected by the same API key.
+// operations as the REST API (src/api.js) and is protected by the same API key,
+// running as that key's team with the same roles, limits and metering.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import * as api from "./api.js";
+import { SYSTEM_TENANT } from "./tenancy.js";
 
 const DEFAULT_MAX_CHARS = Number(process.env.MCP_MAX_CHARS ?? 50_000);
 const EXTRACT_WAIT_MS = Number(process.env.MCP_EXTRACT_WAIT_MS ?? 120_000);
@@ -55,7 +57,7 @@ function docText(doc, maxChars) {
 
 const pngContent = dataUrl => ({ type: "image", data: dataUrl.replace(/^data:image\/png;base64,/, ""), mimeType: "image/png" });
 
-export function buildMcpServer(ctx, { version, baseUrl }) {
+export function buildMcpServer(ctx, { version, baseUrl, tenant = SYSTEM_TENANT }) {
   const server = new McpServer({ name: "minicrawl", version });
 
   server.registerTool(
@@ -88,7 +90,7 @@ export function buildMcpServer(ctx, { version, baseUrl }) {
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     tool(async ({ maxChars = DEFAULT_MAX_CHARS, ...body }) => {
-      const { data } = await api.scrape(ctx, body);
+      const { data } = await api.scrape(ctx, body, tenant);
       const content = [text(docText(data, maxChars))];
       if (data.screenshot) content.push(pngContent(data.screenshot));
       for (const s of data.actions?.screenshots ?? []) content.push(pngContent(s));
@@ -109,7 +111,7 @@ export function buildMcpServer(ctx, { version, baseUrl }) {
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     tool(async ({ limit = 100, ...body }) => {
-      const { links } = await api.map(ctx, { ...body, limit });
+      const { links } = await api.map(ctx, { ...body, limit }, tenant);
       return ok(text(links.length ? `${links.length} URLs:\n${links.join("\n")}` : "No URLs found."));
     }),
   );
@@ -129,7 +131,7 @@ export function buildMcpServer(ctx, { version, baseUrl }) {
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     tool(async ({ scrape = false, maxChars = 10_000, limit = 5, ...body }) => {
-      const { data } = await api.search(ctx, { ...body, limit, ...(scrape ? { scrapeOptions: { formats: ["markdown"] } } : {}) });
+      const { data } = await api.search(ctx, { ...body, limit, ...(scrape ? { scrapeOptions: { formats: ["markdown"] } } : {}) }, tenant);
       if (!data.length) return ok(text("No results."));
       const blocks = data.map((r, i) =>
         [`${i + 1}. ${r.title}`, r.url, r.description, scrape && r.markdown !== undefined ? clip(r.markdown, maxChars) : null]
@@ -158,7 +160,7 @@ export function buildMcpServer(ctx, { version, baseUrl }) {
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     tool(async ({ limit = 10, ...body }) => {
-      const { id } = await api.startCrawl(ctx, { ...body, limit }, baseUrl);
+      const { id } = await api.startCrawl(ctx, { ...body, limit }, baseUrl, tenant);
       return ok(text(`Crawl started. id: ${id}\nCall minicrawl_crawl_status with this id to get progress and pages.`));
     }),
   );
@@ -176,7 +178,7 @@ export function buildMcpServer(ctx, { version, baseUrl }) {
       annotations: { readOnlyHint: true },
     },
     tool(async ({ id, skip = 0, maxChars = DEFAULT_MAX_CHARS }) => {
-      const s = await api.crawlStatus(ctx, id, { skip, pageSize: 50 });
+      const s = await api.crawlStatus(ctx, id, { skip, pageSize: 50 }, tenant);
       const per = Math.max(1000, Math.floor(maxChars / Math.max(1, s.data.length)));
       const pages = s.data.map(d => docText({ metadata: d.metadata, markdown: d.markdown }, per));
       const more = s.data.length === 50 ? `\n\nMore pages available: call again with skip=${skip + 50}.` : "";
@@ -200,10 +202,10 @@ export function buildMcpServer(ctx, { version, baseUrl }) {
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     tool(async body => {
-      const { id } = await api.startExtract(ctx, { ...body, showSources: true });
+      const { id } = await api.startExtract(ctx, { ...body, showSources: true }, tenant);
       const deadline = Date.now() + EXTRACT_WAIT_MS;
       while (Date.now() < deadline) {
-        const s = await api.extractStatus(ctx, id);
+        const s = await api.extractStatus(ctx, id, tenant);
         if (s.status === "failed") return fail(`Extraction failed: ${s.error}`);
         if (s.status === "completed") {
           return ok(text(`${JSON.stringify(s.data, null, 2)}\n\nSources: ${(s.sources ?? []).join(", ")}${s.warning ? `\nWarning: ${s.warning}` : ""}`));
@@ -223,7 +225,7 @@ export function buildMcpServer(ctx, { version, baseUrl }) {
       annotations: { readOnlyHint: true },
     },
     tool(async ({ id }) => {
-      const s = await api.extractStatus(ctx, id);
+      const s = await api.extractStatus(ctx, id, tenant);
       if (s.status === "failed") return fail(`Extraction failed: ${s.error}`);
       if (s.status !== "completed") return ok(text("Still processing. Try again shortly."));
       return ok(text(JSON.stringify(s.data, null, 2)));
@@ -236,7 +238,7 @@ export function buildMcpServer(ctx, { version, baseUrl }) {
 /** Mount POST /mcp (stateless Streamable HTTP) behind the given auth middleware. */
 export function mountMcp(app, ctx, { auth, version }) {
   app.post("/mcp", auth, async (req, res) => {
-    const server = buildMcpServer(ctx, { version, baseUrl: `${req.protocol}://${req.get("host")}` });
+    const server = buildMcpServer(ctx, { version, baseUrl: `${req.protocol}://${req.get("host")}`, tenant: req.tenant });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on("close", () => {
       transport.close().catch(() => {});

@@ -2,23 +2,38 @@
 // `scrape` scrapes one URL and enqueues the links it discovers.
 // Mirrors processKickoffJob / processJob in Firecrawl's scrape-worker.ts.
 import { Crawler, fetchRobotsTxt, fetchSitemapUrls, lockKey, normalizeURL } from "./crawler.js";
-import { scrapeURL } from "./scrape.js";
+import { llmTokens, scrapeURL } from "./scrape.js";
 import { extractLinks } from "./html.js";
 import { sendWebhook } from "./webhook.js";
 import { getMapResults } from "./map.js";
 import { webSearch } from "./search.js";
 import { extractJson } from "./llm.js";
 import { mapLimit } from "./util.js";
-import { DATA_TTL_MS } from "./api.js";
+import { DATA_TTL_MS, TenancyError, checkPageQuota, domainAllowed, loadTeam, meter } from "./tenancy.js";
 
 const CRAWL_PRIORITY = 20; // single scrapes would be 10; crawls yield to them
 
 /** Lock a URL for the crawl and enqueue it if this caller won the lock. */
-async function enqueueIfNew(ctx, crawlId, sc, url, depth) {
-  const co = sc.crawlerOptions;
-  if (!await ctx.store.lockURL(crawlId, lockKey(url, co), co.limit)) return false;
-  await ctx.queue.add({ type: "scrape", groupId: crawlId, priority: CRAWL_PRIORITY, data: { crawlId, url, depth } });
+async function enqueueIfNew(ctx, crawl, url, depth) {
+  const co = crawl.data.crawlerOptions;
+  if (!await ctx.store.lockURL(crawl.id, lockKey(url, co), co.limit)) return false;
+  await ctx.queue.add({
+    type: "scrape",
+    groupId: crawl.id,
+    priority: CRAWL_PRIORITY,
+    data: { crawlId: crawl.id, url, depth },
+    teamId: crawl.team_id,
+    expiresAt: crawl.expires_at,
+  });
   return true;
+}
+
+/** The org's domain policy (stored with the crawl) applied to discovered links. */
+const allowedLinks = (sc, links) => (sc.domainPolicy ? links.filter(l => domainAllowed(sc.domainPolicy, l)) : links);
+
+/** The team's current limits (a team deleted from under a job has none). */
+async function teamLimits(ctx, teamId) {
+  return (await loadTeam(ctx, teamId))?.team.limits ?? {};
 }
 
 async function processKickoff(ctx, job) {
@@ -36,7 +51,7 @@ async function processKickoff(ctx, job) {
   if (crawler.denialReason(startUrl) === "ROBOTS_TXT") {
     await ctx.store.recordRobotsBlocked(crawlId, [startUrl]);
   } else {
-    await enqueueIfNew(ctx, crawlId, sc, startUrl, 0);
+    await enqueueIfNew(ctx, crawl, startUrl, 0);
   }
 
   let fromSitemap = 0;
@@ -44,7 +59,7 @@ async function processKickoff(ctx, job) {
     const urls = await fetchSitemapUrls(sc.url, sc.robotsTxt);
     const { links, robotsBlocked } = crawler.filterLinks(urls);
     await ctx.store.recordRobotsBlocked(crawlId, robotsBlocked);
-    for (const link of links) if (await enqueueIfNew(ctx, crawlId, sc, link, 1)) fromSitemap++;
+    for (const link of allowedLinks(sc, links)) if (await enqueueIfNew(ctx, crawl, link, 1)) fromSitemap++;
   }
   return { fromSitemap };
 }
@@ -56,23 +71,33 @@ async function processScrape(ctx, job) {
   const sc = crawl.data;
   const co = sc.crawlerOptions;
 
-  const { doc, rawHtml, finalUrl } = await scrapeURL(url, sc.scrapeOptions, ctx.scrapeConfig);
+  // Out of pages for today/this month: stop the whole crawl, not page by page.
+  try {
+    await checkPageQuota(ctx, await teamLimits(ctx, crawl.team_id), crawl.team_id);
+  } catch (err) {
+    if (!(err instanceof TenancyError)) throw err;
+    if (await ctx.store.setStatus(crawlId, "failed")) await ctx.queue.dropQueued(crawlId);
+    throw new Error(`${err.code}: ${err.message}`);
+  }
+
+  const { doc, rawHtml, finalUrl, usage } = await scrapeURL(url, sc.scrapeOptions, { ...ctx.scrapeConfig, ...sc.policy });
+  await meter(ctx, crawl.team_id, usage);
 
   // Redirected? Lock the landing URL too, so two URLs that redirect to the
   // same page only produce one document (Firecrawl's RacedRedirectError).
   if (lockKey(finalUrl, co) !== lockKey(url, co) && !await ctx.store.lockURL(crawlId, lockKey(finalUrl, co))) {
     return null;
   }
-  await ctx.store.recordSeen(finalUrl, doc.metadata.title ?? null);
+  if (!sc.zdr) await ctx.store.recordSeen(finalUrl, doc.metadata.title ?? null);
 
   if (depth < (co.maxDiscoveryDepth ?? Infinity) && (await ctx.store.get(crawlId))?.status === "scraping") {
     const crawler = new Crawler(sc.url, co, sc.robotsTxt);
     const discovered = extractLinks(rawHtml, finalUrl);
     const { links, robotsBlocked } = crawler.filterLinks(discovered);
     await ctx.store.recordRobotsBlocked(crawlId, robotsBlocked);
-    for (const link of links) {
-      await ctx.store.recordSeen(link);
-      await enqueueIfNew(ctx, crawlId, sc, link, depth + 1);
+    for (const link of allowedLinks(sc, links)) {
+      if (!sc.zdr) await ctx.store.recordSeen(link);
+      await enqueueIfNew(ctx, crawl, link, depth + 1);
     }
   }
 
@@ -88,7 +113,9 @@ const EXTRACT_MAX_PAGES = Number(process.env.EXTRACT_MAX_PAGES ?? 10);
  * across all of them. Firecrawl's fire-0 extract does the same steps.
  */
 async function processExtract(ctx, job) {
-  const { urls, prompt, schema, systemPrompt, enableWebSearch, scrapeOptions } = job.data;
+  const { urls, prompt, schema, systemPrompt, enableWebSearch, scrapeOptions, policy, domainPolicy, zdr } = job.data;
+  const teamId = job.team_id;
+  await checkPageQuota(ctx, await teamLimits(ctx, teamId), teamId);
   const targets = new Set();
   for (const u of urls) {
     if (u.endsWith("/*")) {
@@ -102,13 +129,14 @@ async function processExtract(ctx, job) {
     for (const r of await webSearch(prompt, { limit: 3 }).catch(() => [])) targets.add(r.url);
   }
 
-  const list = [...targets].slice(0, EXTRACT_MAX_PAGES);
+  const list = [...targets].filter(u => domainAllowed(domainPolicy, u)).slice(0, EXTRACT_MAX_PAGES);
   const failed = [];
   const docs = (
     await mapLimit(list, 4, async url => {
       try {
-        const { doc } = await scrapeURL(url, { ...scrapeOptions, formats: ["markdown"] }, ctx.scrapeConfig);
-        await ctx.store.recordSeen(doc.metadata.url, doc.metadata.title ?? null);
+        const { doc, usage } = await scrapeURL(url, { ...scrapeOptions, formats: ["markdown"] }, { ...ctx.scrapeConfig, ...policy });
+        await meter(ctx, teamId, usage);
+        if (!zdr) await ctx.store.recordSeen(doc.metadata.url, doc.metadata.title ?? null);
         return { url: doc.metadata.url, title: doc.metadata.title, markdown: doc.markdown };
       } catch (err) {
         failed.push({ url, error: err.message });
@@ -121,6 +149,7 @@ async function processExtract(ctx, job) {
   }
 
   const { data, warnings, usage } = await extractJson(docs, { schema, prompt, systemPrompt });
+  await meter(ctx, teamId, llmTokens(usage));
   return { data, sources: docs.map(d => d.url), failed, warnings, usage };
 }
 
@@ -129,6 +158,8 @@ const handlers = { kickoff: processKickoff, scrape: processScrape, extract: proc
 // How long a URL stays in the index /map draws on after it was last seen. 0 = forever.
 const SEEN_URLS_TTL_MS = Number(process.env.SEEN_URLS_TTL_DAYS ?? 30) * 24 * 60 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
+// Audit log retention. 0 = keep forever.
+const AUDIT_TTL_MS = Number(process.env.AUDIT_RETENTION_DAYS ?? 365) * 24 * 60 * 60 * 1000;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -178,6 +209,7 @@ export function startWorkers(ctx, { concurrency = 4, pollMs = 100, staleLockMs =
   const prune = async () => {
     try {
       const removed = await ctx.store.pruneExpired({ dataTtlMs: DATA_TTL_MS, seenTtlMs: SEEN_URLS_TTL_MS });
+      await ctx.storage.tenancy?.prune({ auditTtlMs: AUDIT_TTL_MS });
       if (removed.crawls || removed.jobs || removed.seenUrls) {
         console.log(`cleanup: removed ${removed.crawls} crawls, ${removed.jobs} jobs, ${removed.seenUrls} index URLs`);
       }

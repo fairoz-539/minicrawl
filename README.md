@@ -19,6 +19,7 @@ It reads web pages, JavaScript apps, PDFs, Office files and images, and runs on 
 [**API reference**](docs/API.md) ·
 [**Integrations**](docs/INTEGRATIONS.md) ·
 [**Self-hosting guide**](docs/SELF_HOSTING.md) ·
+[**Teams & quotas**](docs/ADMIN.md) ·
 [**Contributing**](CONTRIBUTING.md)
 
 </div>
@@ -89,6 +90,7 @@ Prefer building from source? Use `docker compose up -d --build`. For servers, HT
 | 🛡️ **Proxies** | Bring-your-own basic and stealth pools; blocked requests retry through stealth automatically |
 | 🔐 **Secure defaults** | Required API keys (several per server), SSRF protection, non-root container, health checks |
 | 🪶 **Lightweight** | One container plus SearXNG, with SQLite storage. No Redis, Postgres or message queue |
+| 🏢 **Teams and quotas** | Per-team API keys (hashed), roles and scopes, quotas and rate limits, usage metering, zero data retention, IP allowlists, domain policies, and an audit log you can stream to a SIEM |
 | 📈 **Scales out** | Optional Postgres scale mode: separate API and worker containers, with Docker Compose or a Helm chart |
 | 📘 **Documented** | Interactive `/docs` (OpenAPI), full API reference, and a self-hosting guide |
 
@@ -104,7 +106,7 @@ Prefer building from source? Use `docker compose up -d --build`. For servers, HT
 | `GET` | [`/health`](docs/API.md#health-and-discovery) | Status and which features are enabled |
 | `GET` | `/docs` · `/openapi.json` | Interactive explorer · OpenAPI spec |
 
-Also: `GET /v1/crawl/{id}/errors`, `DELETE /v1/crawl/{id}`, and `POST /mcp` for AI agents. See the **[full API reference](docs/API.md)** for every option, response and error code.
+Also: `GET /v1/crawl/{id}/errors`, `DELETE /v1/crawl/{id}`, and `POST /mcp` for AI agents. Teams, keys, usage and the audit log live under [`/admin/v1`](docs/ADMIN.md). See the **[full API reference](docs/API.md)** for every option, response and error code.
 
 ## 🤖 Integrations
 
@@ -228,6 +230,7 @@ PowerShell examples and every option are in the **[API reference](docs/API.md#ca
 | PDF / Office / image OCR | ✅ offline | partial | ✅ |
 | Services to run | 2 containers (API, workers and Postgres to scale out) | API, workers, Postgres, Redis, RabbitMQ, Playwright | – |
 | Interactive API docs (`/docs`) | ✅ | – | ✅ (website) |
+| Teams, per-team keys, quotas, usage, audit log | ✅ | – | ✅ |
 | Anti-bot network (stealth fleet, residential proxies) | bring your own proxies | – | ✅ |
 | v2 API, batch scrape, deep research, change monitoring | – | ✅ | ✅ |
 | Cost | free, your hardware | free, your hardware | per page |

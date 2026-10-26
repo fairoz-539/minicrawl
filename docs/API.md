@@ -32,7 +32,9 @@ When the server has an API key (always, in Docker, unless `ALLOW_NO_AUTH=true`),
 Authorization: Bearer <your API key>
 ```
 
-Keys come from `API_KEY` and/or `API_KEYS=key1,key2` in `.env`. A missing or wrong key returns `401 UNAUTHORIZED`. `/health`, `/`, `/docs` and `/openapi.json` are public; they contain no secrets.
+Keys come from `API_KEY` and/or `API_KEYS=key1,key2` in `.env`, or are created per team with the admin API (`mc_…` keys). A missing, wrong, revoked or expired key returns `401 UNAUTHORIZED`. `/health`, `/`, `/docs` and `/openapi.json` are public; they contain no secrets.
+
+Each key belongs to a team. The team's role checks, quotas, rate limit and feature switches apply to every call, and you only see your own team's crawls and extract jobs. See **[Teams, API keys, quotas and audit](ADMIN.md)** for the `/admin/v1` endpoints.
 
 ## Endpoint overview
 
@@ -430,7 +432,12 @@ Every error has the same shape:
 | HTTP | `code` | Meaning / what to do |
 |---|---|---|
 | 400 | `BAD_REQUEST` | Invalid body. `details` lists the problems, including unrecognized keys |
-| 401 | `UNAUTHORIZED` | Missing or wrong API key |
+| 401 | `UNAUTHORIZED` | Missing, wrong, revoked or expired API key |
+| 402 | `QUOTA_EXCEEDED` | Your team used its daily/monthly pages. `Retry-After` says when it resets |
+| 403 | `FORBIDDEN` | Your key's role or scopes don't allow this (e.g. a viewer key starting a crawl) |
+| 403 | `FEATURE_DISABLED` | AI, browser, stealth proxy or search is switched off for your team |
+| 403 | `DOMAIN_NOT_ALLOWED` | Your organization's domain policy blocks this site |
+| 403 | `IP_NOT_ALLOWED` / `TEAM_DISABLED` | Your address isn't on the team's allowlist / the team is disabled |
 | 403 | `BLOCKED_URL` | URL resolves to a private/local address (SSRF protection). Set `ALLOW_PRIVATE_URLS=true` only if you trust all callers |
 | 403 | `BLOCKED_BY_SITE` | The site served a bot challenge. Try `proxy: "stealth"` with `STEALTH_PROXY_URLS` |
 | 404 | `NOT_FOUND` | Unknown crawl/extract id |
@@ -441,6 +448,7 @@ Every error has the same shape:
 | 422 | `NO_STEALTH_PROXY` | `proxy: "stealth"` without `STEALTH_PROXY_URLS` |
 | 422 | `BODY_TOO_LARGE` / `TOO_MANY_REDIRECTS` | Response over 50 MB / more than 10 redirects |
 | 422 | `LLM_REFUSAL` / `LLM_OUTPUT_TOO_LARGE` | The model declined, or the result was too big |
+| 429 | `RATE_LIMITED` | Your team's requests per minute. Wait `Retry-After` seconds |
 | 429 | `LLM_RATE_LIMITED` | Anthropic rate limit; retry later |
 | 503 | `LLM_NOT_CONFIGURED` | `ANTHROPIC_API_KEY` missing or invalid |
 | 503 | `SEARCH_BLOCKED` | No SearXNG and DuckDuckGo refused |

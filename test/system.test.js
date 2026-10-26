@@ -29,7 +29,7 @@ function registeredRoutes(app) {
   const out = [];
   for (const layer of app.router.stack) {
     if (layer.route) {
-      for (const m of Object.keys(layer.route.methods)) out.push(`${m.toUpperCase()} ${layer.route.path}`);
+      for (const m of Object.keys(layer.route.methods)) out.push(`${m.toUpperCase()} ${String(layer.route.path).replace(/:(\w+)/g, "{$1}")}`);
     } else if (layer.handle?.stack) {
       for (const l of layer.handle.stack) {
         if (!l.route) continue;
@@ -59,15 +59,15 @@ describe("system endpoints", () => {
     delete process.env.STEALTH_PROXY_URLS;
   });
 
-  test("/openapi.json documents every /v1 route the server registers", async () => {
+  test("/openapi.json documents every /v1 and /admin/v1 route the server registers", async () => {
     const { app, base } = await serve({ apiKeys: [] });
     const spec = await fetch(`${base}/openapi.json`).then(r => r.json());
     assert.match(spec.openapi, /^3\./);
     const documented = new Set(
       Object.entries(spec.paths).flatMap(([p, ops]) => Object.keys(ops).map(m => `${m.toUpperCase()} ${p}`)),
     );
-    const routes = registeredRoutes(app).filter(r => r.includes(" /v1/") || r.endsWith(" /health"));
-    assert.ok(routes.length >= 10, `found routes: ${routes}`);
+    const routes = registeredRoutes(app).filter(r => r.includes(" /v1/") || r.includes(" /admin/v1/") || r.endsWith(" /health"));
+    assert.ok(routes.length >= 20, `found routes: ${routes}`);
     for (const r of routes) assert.ok(documented.has(r), `${r} is missing from the OpenAPI spec`);
     // Request bodies come from the zod schemas.
     assert.ok(spec.components.schemas.ScrapeRequest.properties.actions);

@@ -10,6 +10,8 @@
 import pg from "pg";
 import { randomUUID } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
+import { CLAIM_SKIP_FULL_TEAMS } from "./db.js";
+import { TenancyStore } from "./tenancy-store.js";
 
 const MIGRATIONS_DIR = new URL("../migrations/postgres/", import.meta.url);
 const MIGRATION_LOCK = 7_250_118_042; // arbitrary constant for pg_advisory_lock
@@ -65,11 +67,11 @@ class PgQueue {
     this.seq = 0;
   }
 
-  async add({ type, data, priority = 10, groupId = null, id = randomUUID() }) {
+  async add({ type, data, priority = 10, groupId = null, id = randomUUID(), teamId = "default", expiresAt = null }) {
     const createdAt = Date.now() * 1000 + (this.seq++ % 1000);
     await this.pool.query(
-      "INSERT INTO jobs (id, type, priority, data, group_id, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
-      [id, type, priority, JSON.stringify(data), groupId, createdAt],
+      "INSERT INTO jobs (id, type, priority, data, group_id, created_at, team_id, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+      [id, type, priority, JSON.stringify(data), groupId, createdAt, teamId, expiresAt],
     );
     return id;
   }
@@ -78,7 +80,7 @@ class PgQueue {
     const lock = randomUUID();
     const { rows } = await this.pool.query(
       `UPDATE jobs SET status = 'active', lock = $1, locked_at = $2
-       WHERE id = (SELECT id FROM jobs WHERE status = 'queued'
+       WHERE id = (SELECT id FROM jobs WHERE status = 'queued' AND ${CLAIM_SKIP_FULL_TEAMS}
                    ORDER BY priority ASC, created_at ASC
                    FOR UPDATE SKIP LOCKED LIMIT 1)
        RETURNING *`,
@@ -170,8 +172,14 @@ class PgCrawlStore {
     this.pool = pool;
   }
 
-  async create(id, crawl) {
-    await this.pool.query("INSERT INTO crawls (id, data, created_at) VALUES ($1, $2, $3)", [id, JSON.stringify(crawl), Date.now()]);
+  async create(id, crawl, { teamId = "default", expiresAt = null } = {}) {
+    await this.pool.query("INSERT INTO crawls (id, data, created_at, team_id, expires_at) VALUES ($1, $2, $3, $4, $5)", [
+      id,
+      JSON.stringify(crawl),
+      Date.now(),
+      teamId,
+      expiresAt,
+    ]);
   }
 
   async get(id) {
@@ -271,13 +279,15 @@ class PgCrawlStore {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      if (dataTtlMs > 0) {
-        const cutoff = now - dataTtlMs;
+      {
+        // dataTtlMs 0: rows without their own expiry are kept forever.
+        const cutoff = dataTtlMs > 0 ? now - dataTtlMs : -1;
         // SKIP LOCKED: several workers can run cleanup at once without blocking each other.
         const ids = (
           await client.query(
-            "SELECT id FROM crawls WHERE status != 'scraping' AND created_at < $1 LIMIT $2 FOR UPDATE SKIP LOCKED",
-            [cutoff, batch],
+            `SELECT id FROM crawls WHERE status != 'scraping'
+             AND (expires_at < $1 OR (expires_at IS NULL AND created_at < $2)) LIMIT $3 FOR UPDATE SKIP LOCKED`,
+            [now, cutoff, batch],
           )
         ).rows.map(r => r.id);
         if (ids.length) {
@@ -289,9 +299,10 @@ class PgCrawlStore {
         out.jobs += (
           await client.query(
             `DELETE FROM jobs WHERE id IN (
-               SELECT id FROM jobs WHERE group_id IS NULL AND status IN ('completed', 'failed') AND created_at < $1
-               LIMIT $2 FOR UPDATE SKIP LOCKED)`,
-            [cutoff * 1000, batch * 10],
+               SELECT id FROM jobs WHERE group_id IS NULL AND status IN ('completed', 'failed')
+               AND (expires_at < $1 OR (expires_at IS NULL AND created_at < $2))
+               LIMIT $3 FOR UPDATE SKIP LOCKED)`,
+            [now, cutoff * 1000, batch * 10],
           )
         ).rowCount;
       }
@@ -349,6 +360,14 @@ export async function openPostgresStorage({ url, ephemeral = false }) {
     kind: "postgres",
     queue: new PgQueue(pool),
     store: new PgCrawlStore(pool),
+    tenancy: new TenancyStore({
+      async all(sql, params) {
+        return (await pool.query(numbered(sql), params)).rows;
+      },
+      async run(sql, params) {
+        return (await pool.query(numbered(sql), params)).rowCount;
+      },
+    }),
     async ping() {
       await pool.query("SELECT 1");
     },

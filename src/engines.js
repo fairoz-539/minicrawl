@@ -168,7 +168,8 @@ async function getBrowserEngine() {
 
 /** Engines usable in this process, in waterfall order for the given options. */
 export async function selectEngines(opts) {
-  const browser = await getBrowserEngine();
+  // noBrowser: the team has the browser engine disabled (src/tenancy.js).
+  const browser = opts.noBrowser ? null : await getBrowserEngine();
   if (opts.engine === "fetch") return [fetchEngine];
   if (opts.screenshot || opts.actions?.length) {
     if (!browser) {
