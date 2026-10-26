@@ -8,7 +8,7 @@ import express from "express";
 import { timingSafeEqual } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
-import { openDb, Queue, CrawlStore } from "./db.js";
+import { openStorage } from "./storage.js";
 import { startWorkers } from "./worker.js";
 import { ActionError, closeBrowser, FatalScrapeError, ScrapeTimeoutError, SiteBlockedError } from "./engines.js";
 import { LLMError } from "./llm.js";
@@ -83,7 +83,7 @@ async function detectFeatures() {
   };
 }
 
-export function createApp(ctx, { apiKeys = configuredApiKeys() } = {}) {
+export function createApp(ctx, { apiKeys = configuredApiKeys(), mode = "all" } = {}) {
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "1mb" }));
@@ -101,22 +101,7 @@ export function createApp(ctx, { apiKeys = configuredApiKeys() } = {}) {
     }),
   );
 
-  // Liveness and capabilities. Public: it never includes secrets.
-  app.get("/health", async (_req, res) => {
-    let db = true;
-    try {
-      ctx.db.prepare("SELECT 1").get();
-    } catch {
-      db = false;
-    }
-    res.status(db ? 200 : 503).json({
-      status: db ? "ok" : "error",
-      version: VERSION,
-      auth: apiKeys.length > 0,
-      db,
-      features: await detectFeatures(),
-    });
-  });
+  app.get("/health", healthHandler(ctx, { auth: apiKeys.length > 0, mode }));
 
   mountDocs(app);
 
@@ -177,20 +162,47 @@ export function createApp(ctx, { apiKeys = configuredApiKeys() } = {}) {
   return app;
 }
 
-export function createContext({ dbPath } = {}) {
-  const db = openDb(dbPath);
-  return { db, queue: new Queue(db), store: new CrawlStore(db), scrapeConfig: {} };
+/** Liveness and capabilities. Public: it never includes secrets. */
+function healthHandler(ctx, { auth, mode = "all" }) {
+  return async (_req, res) => {
+    let db = true;
+    try {
+      await ctx.storage.ping();
+    } catch {
+      db = false;
+    }
+    res.status(db ? 200 : 503).json({
+      status: db ? "ok" : "error",
+      version: VERSION,
+      mode,
+      storage: ctx.storage.kind,
+      auth,
+      db,
+      features: await detectFeatures(),
+    });
+  };
 }
+
+export async function createContext({ dbPath } = {}) {
+  const storage = await openStorage({ dbPath });
+  return { storage, queue: storage.queue, store: storage.store, scrapeConfig: {} };
+}
+
+const MODES = ["all", "api", "worker"];
 
 export async function start({
   port = Number(process.env.PORT ?? 3002),
   host = process.env.HOST ?? "0.0.0.0",
   workers = Number(process.env.WORKERS ?? 4),
+  // all: API + workers in one process (default). In scale mode run them
+  // separately: api processes serve HTTP, worker processes run the jobs.
+  mode = (process.env.MODE ?? "all").toLowerCase(),
   dbPath,
 } = {}) {
+  if (!MODES.includes(mode)) throw new StartupError(`Unknown MODE "${mode}": use all, api or worker`);
   // The Docker image sets REQUIRE_API_KEY=true so a public deployment can't
   // accidentally run open. ALLOW_NO_AUTH=true is the explicit opt-out.
-  if (process.env.REQUIRE_API_KEY === "true" && process.env.ALLOW_NO_AUTH !== "true") {
+  if (mode !== "worker" && process.env.REQUIRE_API_KEY === "true" && process.env.ALLOW_NO_AUTH !== "true") {
     const keys = configuredApiKeys();
     if (keys.length === 0) {
       throw new StartupError(
@@ -206,14 +218,30 @@ export async function start({
       );
     }
   }
-  const ctx = createContext({ dbPath });
-  const pool = workers > 0 ? startWorkers(ctx, { concurrency: workers }) : null;
-  const app = createApp(ctx);
+  const ctx = await createContext({ dbPath });
+  const pool =
+    mode !== "api" && workers > 0
+      ? startWorkers(ctx, {
+          concurrency: workers,
+          // A job whose worker stops heartbeating this long is handed to another worker.
+          staleLockMs: Number(process.env.JOB_LOCK_TIMEOUT_MS ?? 60_000),
+        })
+      : null;
+  // A worker-only process still answers /health, for container orchestrators.
+  let app;
+  if (mode === "worker") {
+    app = express();
+    app.disable("x-powered-by");
+    app.get("/health", healthHandler(ctx, { auth: false, mode }));
+  } else {
+    app = createApp(ctx, { mode });
+  }
   const server = await new Promise(resolve => {
     const s = app.listen(port, host, () => resolve(s));
   });
   return {
     ctx,
+    mode,
     server,
     port: server.address().port,
     async close() {
@@ -221,7 +249,7 @@ export async function start({
       await pool?.stop();
       await closeBrowser();
       await closeOcr();
-      ctx.db.close();
+      await ctx.storage.close();
     },
   };
 }
@@ -239,8 +267,11 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   }
   const keys = configuredApiKeys().length;
   console.log(
-    `minicrawl ${VERSION} listening on :${instance.port} (${process.env.WORKERS ?? 4} workers, ` +
-      `${keys ? `${keys} API key${keys > 1 ? "s" : ""}` : "no auth"}) - docs at /docs`,
+    instance.mode === "worker"
+      ? `minicrawl ${VERSION} worker (${process.env.WORKERS ?? 4} workers, ${instance.ctx.storage.kind}) - health on :${instance.port}/health`
+      : `minicrawl ${VERSION} ${instance.mode === "api" ? "API" : "listening"} on :${instance.port} ` +
+          `(${instance.mode === "api" ? "no workers" : `${process.env.WORKERS ?? 4} workers`}, ${instance.ctx.storage.kind}, ` +
+          `${keys ? `${keys} API key${keys > 1 ? "s" : ""}` : "no auth"}) - docs at /docs`,
   );
   const shutdown = async () => {
     await instance.close();

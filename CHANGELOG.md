@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-26
+
+### Added
+
+- **Scale mode:** `STORAGE=postgres` with `DATABASE_URL` stores jobs and crawls in Postgres, so many API and worker processes can share the work.
+  - Jobs are claimed with `FOR UPDATE SKIP LOCKED`, so none runs twice.
+  - Crawl page limits stay exact across workers.
+  - A dead worker's jobs are retried elsewhere after `JOB_LOCK_TIMEOUT_MS`.
+  - Tables are created and migrated automatically.
+- **Process roles:** `MODE=api|worker|all` (default `all`). Worker processes need no API key and serve only `/health`.
+- **`docker-compose.scale.yml`:** API, scalable workers (`--scale worker=N`), Postgres 17 and SearXNG.
+- **Helm chart** (`deploy/helm/minicrawl`): API and worker Deployments, optional worker autoscaling, SearXNG, Ingress, health probes.
+- `/health` reports `mode` and `storage`.
+- CI runs the whole test suite on Postgres too. It adds multi-process tests (3 workers, exact limits, recovery from a killed worker) and lints the Helm chart.
+
+### Changed
+
+- SQLite stays the default; nothing changes for existing installs.
+- The setup scripts also generate `POSTGRES_PASSWORD`.
+
 ## [1.1.0] - 2026-10-24
 
 ### Added

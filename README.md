@@ -66,7 +66,7 @@ docker compose pull && docker compose up -d
 2. **Docker** pulls the prebuilt image (`ghcr.io/fairoz-539/minicrawl`, amd64 and arm64) and starts minicrawl, with headless Chromium and OCR built in, plus a private [SearXNG](https://github.com/searxng/searxng) for search.
 3. Open **http://localhost:3002/docs**, click **Authorize**, paste your key, and try every endpoint in the browser.
 
-Prefer building from source? Use `docker compose up -d --build`. For servers, HTTPS, configuration and troubleshooting, see the **[self-hosting guide](docs/SELF_HOSTING.md)**.
+Prefer building from source? Use `docker compose up -d --build`. For servers, HTTPS, scaling out with Postgres or Kubernetes, configuration and troubleshooting, see the **[self-hosting guide](docs/SELF_HOSTING.md)**.
 
 > [!IMPORTANT]
 > **Bring your own keys.** The repository contains no keys. Every installation generates its own API key, kept only in its own `.env`, which is git-ignored and excluded from Docker builds. AI extraction uses each installer's own `ANTHROPIC_API_KEY`. The container refuses to start without a key, or with a placeholder or weak one.
@@ -89,6 +89,7 @@ Prefer building from source? Use `docker compose up -d --build`. For servers, HT
 | 🛡️ **Proxies** | Bring-your-own basic and stealth pools; blocked requests retry through stealth automatically |
 | 🔐 **Secure defaults** | Required API keys (several per server), SSRF protection, non-root container, health checks |
 | 🪶 **Lightweight** | One container plus SearXNG, with SQLite storage. No Redis, Postgres or message queue |
+| 📈 **Scales out** | Optional Postgres scale mode: separate API and worker containers, with Docker Compose or a Helm chart |
 | 📘 **Documented** | Interactive `/docs` (OpenAPI), full API reference, and a self-hosting guide |
 
 ## 🔌 API at a glance
@@ -225,7 +226,7 @@ PowerShell examples and every option are in the **[API reference](docs/API.md#ca
 | Firecrawl v1 API | ✅ | ✅ | ✅ |
 | JS rendering, actions, screenshots | ✅ | ✅ | ✅ |
 | PDF / Office / image OCR | ✅ offline | partial | ✅ |
-| Services to run | 2 containers | API, workers, Postgres, Redis, RabbitMQ, Playwright | – |
+| Services to run | 2 containers (API, workers and Postgres to scale out) | API, workers, Postgres, Redis, RabbitMQ, Playwright | – |
 | Interactive API docs (`/docs`) | ✅ | – | ✅ (website) |
 | Anti-bot network (stealth fleet, residential proxies) | bring your own proxies | – | ✅ |
 | v2 API, batch scrape, deep research, change monitoring | – | ✅ | ✅ |

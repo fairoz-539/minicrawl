@@ -12,6 +12,7 @@ This guide gets minicrawl running on your own computer or server. The recommende
 - [Running without Docker](#running-without-docker-nodejs)
 - [Updating, backups, logs](#operations)
 - [Sizing and tuning](#sizing-and-tuning)
+- [Scale mode](#scale-mode-postgres-many-workers): Postgres, separate API and worker containers, Helm
 - [SDK compatibility](#sdk-compatibility)
 - [Troubleshooting](#troubleshooting)
 - [Uninstalling](#uninstalling)
@@ -329,6 +330,52 @@ docker run --rm -v minicrawl_minicrawl-data:/data -v "$PWD":/backup busybox tar 
 - Plain HTML pages use the fast HTTP path and are cheap. Hundreds per minute is normal.
 - OCR runs on the CPU. A scanned page takes roughly 0.3–2 s.
 - To be polite to sites you don't own, keep `WORKERS` low and use `limit`. minicrawl has no per-site delay.
+- Need more than one machine can do? See [Scale mode](#scale-mode-postgres-many-workers).
+
+## Scale mode (Postgres, many workers)
+
+The default setup keeps everything in one container with SQLite, which is plenty for one team. When you need more throughput or high availability, **scale mode** splits minicrawl into separate processes that share a Postgres database:
+
+- **API** containers (`MODE=api`) answer requests and queue jobs. Run two or more behind a load balancer.
+- **Worker** containers (`MODE=worker`) claim jobs from Postgres (`FOR UPDATE SKIP LOCKED`, so no job runs twice) and do the scraping. Add more to crawl faster.
+- If a worker dies mid-job, its jobs are handed to another worker after `JOB_LOCK_TIMEOUT_MS` (default 60 s). Crawl page limits stay exact across workers.
+
+Database tables are created and upgraded automatically on startup (`migrations/postgres`).
+
+### With Docker Compose
+
+`docker-compose.scale.yml` runs an API container, workers, Postgres 17 and SearXNG. `scripts/setup.sh` / `setup.ps1` already generate `POSTGRES_PASSWORD` in `.env`.
+
+```bash
+docker compose -f docker-compose.scale.yml up -d --scale worker=3
+```
+
+Check it: `curl http://localhost:3002/health` reports `"mode":"api"` and `"storage":"postgres"`. Each worker runs `WORKERS` jobs at a time (default 4), so 3 workers handle 12 pages at once.
+
+### With Kubernetes (Helm)
+
+The chart in `deploy/helm/minicrawl` deploys API and worker Deployments (with an optional autoscaler), SearXNG and an optional Ingress. Bring your own Postgres 14+ (a managed database, or e.g. the Bitnami chart):
+
+```bash
+helm install minicrawl ./deploy/helm/minicrawl \
+  --set apiKeys="$(openssl rand -hex 32)" \
+  --set databaseUrl="postgres://minicrawl:PASSWORD@my-postgres:5432/minicrawl"
+```
+
+Useful values: `api.replicas`, `worker.replicas`, `worker.concurrency`, `worker.autoscaling.enabled`, `ingress.enabled` / `ingress.host`, `anthropicApiKey`, `existingSecret` (instead of passing keys on the command line) and `env` for any other setting. See `values.yaml` for all of them.
+
+### Settings
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `STORAGE` | `sqlite` | `postgres` enables scale mode |
+| `DATABASE_URL` | – | `postgres://user:password@host:5432/db` (required with `STORAGE=postgres`) |
+| `MODE` | `all` | `api` (HTTP only), `worker` (jobs only, serves just `/health`), or `all` (both) |
+| `JOB_LOCK_TIMEOUT_MS` | `60000` | How long a silent worker keeps its jobs before they are retried elsewhere |
+| `PG_POOL_MAX` | `10` | Database connections per process |
+| `PG_SCHEMA` | `public` | Postgres schema for minicrawl's tables |
+
+Workers don't need an API key, and only API containers need a published port. Back up the database with your usual Postgres tooling (`pg_dump`).
 
 ## SDK compatibility
 

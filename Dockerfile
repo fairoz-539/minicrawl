@@ -20,6 +20,7 @@ RUN npm ci --omit=dev \
  && rm -rf /var/lib/apt/lists/*
 
 COPY src ./src
+COPY migrations ./migrations
 RUN mkdir -p /data && chown node:node /data
 
 USER node

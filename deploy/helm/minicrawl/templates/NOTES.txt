@@ -1,0 +1,13 @@
+minicrawl {{ .Chart.AppVersion }} is starting: {{ .Values.api.replicas }} API pod(s) and {{ if .Values.worker.autoscaling.enabled }}{{ .Values.worker.autoscaling.minReplicas }}-{{ .Values.worker.autoscaling.maxReplicas }} (autoscaled){{ else }}{{ .Values.worker.replicas }}{{ end }} worker pod(s), on Postgres.
+
+Check it:
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "minicrawl.fullname" . }}-api
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "minicrawl.fullname" . }} 3002:{{ .Values.api.service.port }}
+  curl http://localhost:3002/health
+
+Interactive API docs: http://localhost:3002/docs (click Authorize, paste one of your apiKeys).
+{{- if .Values.ingress.enabled }}
+Public URL: http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.host }}
+{{- end }}
+
+Scale workers:  kubectl -n {{ .Release.Namespace }} scale deploy/{{ include "minicrawl.fullname" . }}-worker --replicas=5

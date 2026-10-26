@@ -7,7 +7,7 @@ const { createApp, createContext, start, StartupError } = await import("../src/s
 
 const servers = [];
 async function serve(options) {
-  const ctx = createContext({ dbPath: ":memory:" });
+  const ctx = await createContext({ dbPath: ":memory:" });
   const app = createApp(ctx, options);
   const server = await new Promise(r => {
     const s = app.listen(0, "127.0.0.1", () => r(s));
@@ -20,7 +20,7 @@ after(async () => {
   for (const { server, ctx } of servers) {
     server.closeAllConnections();
     await new Promise(r => server.close(r));
-    ctx.db.close();
+    await ctx.storage.close();
   }
 });
 

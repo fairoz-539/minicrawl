@@ -16,6 +16,7 @@ rand() {
 
 api_key="$(rand)"
 searxng_secret="$(rand)"
+postgres_password="$(rand)"
 
 echo "Optional: your own Anthropic API key for AI extraction (https://console.anthropic.com)."
 read -r -s -p "Paste it, or press Enter to skip: " anthropic_key || true
@@ -23,6 +24,7 @@ echo
 
 sed -e "s|^API_KEY=.*|API_KEY=${api_key}|" \
     -e "s|^SEARXNG_SECRET=.*|SEARXNG_SECRET=${searxng_secret}|" \
+    -e "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${postgres_password}|" \
     .env.example > .env
 if [ -n "${anthropic_key}" ]; then
   sed -i.bak "s|^# ANTHROPIC_API_KEY=.*|ANTHROPIC_API_KEY=${anthropic_key}|" .env && rm -f .env.bak

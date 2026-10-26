@@ -27,26 +27,26 @@ export class NotFoundError extends Error {
 export async function scrape(ctx, body) {
   const { url, origin: _o, integration: _i, ...opts } = scrapeBody.parse(body);
   const { doc } = await scrapeURL(url, opts, ctx.scrapeConfig);
-  ctx.store.recordSeen(doc.metadata.url, doc.metadata.title ?? null);
+  await ctx.store.recordSeen(doc.metadata.url, doc.metadata.title ?? null);
   return { success: true, data: doc };
 }
 
 /** @param {string} baseUrl e.g. "http://localhost:3002", used for the status URL */
-export function startCrawl(ctx, body, baseUrl) {
+export async function startCrawl(ctx, body, baseUrl) {
   const { url, scrapeOptions: so, webhook: hook, origin: _o, integration: _i, ...crawlerOptions } = crawlBody.parse(body);
   const id = randomUUID();
   const sc = { url, crawlerOptions, scrapeOptions: { ...DEFAULT_SCRAPE_OPTIONS, ...so }, webhook: hook };
-  ctx.store.create(id, sc);
-  ctx.queue.add({ type: "kickoff", groupId: id, priority: 5, data: { crawlId: id } });
+  await ctx.store.create(id, sc);
+  await ctx.queue.add({ type: "kickoff", groupId: id, priority: 5, data: { crawlId: id } });
   sendWebhook(hook, "crawl.started", id, []);
   return { success: true, id, url: `${baseUrl}/v1/crawl/${id}` };
 }
 
-export function crawlStatus(ctx, id, { skip = 0, baseUrl, pageSize = PAGE_SIZE } = {}) {
-  const crawl = ctx.store.get(id);
+export async function crawlStatus(ctx, id, { skip = 0, baseUrl, pageSize = PAGE_SIZE } = {}) {
+  const crawl = await ctx.store.get(id);
   if (!crawl) throw new NotFoundError("Crawl not found");
-  const counts = ctx.queue.groupCounts(crawl.id);
-  const data = ctx.queue.groupDocuments(crawl.id, skip, pageSize);
+  const counts = await ctx.queue.groupCounts(crawl.id);
+  const data = await ctx.queue.groupDocuments(crawl.id, skip, pageSize);
   const more = data.length === pageSize;
   return {
     success: true,
@@ -62,16 +62,16 @@ export function crawlStatus(ctx, id, { skip = 0, baseUrl, pageSize = PAGE_SIZE }
   };
 }
 
-export function crawlErrors(ctx, id) {
-  const crawl = ctx.store.get(id);
+export async function crawlErrors(ctx, id) {
+  const crawl = await ctx.store.get(id);
   if (!crawl) throw new NotFoundError("Crawl not found");
-  return { errors: ctx.queue.groupErrors(crawl.id), robotsBlocked: ctx.store.robotsBlocked(crawl.id) };
+  return { errors: await ctx.queue.groupErrors(crawl.id), robotsBlocked: await ctx.store.robotsBlocked(crawl.id) };
 }
 
-export function cancelCrawl(ctx, id) {
-  const crawl = ctx.store.get(id);
+export async function cancelCrawl(ctx, id) {
+  const crawl = await ctx.store.get(id);
   if (!crawl) throw new NotFoundError("Crawl not found");
-  if (ctx.store.setStatus(crawl.id, "cancelled")) ctx.queue.dropQueued(crawl.id);
+  if (await ctx.store.setStatus(crawl.id, "cancelled")) await ctx.queue.dropQueued(crawl.id);
   return { success: true, status: "cancelled" };
 }
 
@@ -88,7 +88,7 @@ export async function search(ctx, body) {
   const data = await mapLimit(results, 4, async r => {
     try {
       const { doc } = await scrapeURL(r.url, so, ctx.scrapeConfig);
-      ctx.store.recordSeen(doc.metadata.url, doc.metadata.title ?? null);
+      await ctx.store.recordSeen(doc.metadata.url, doc.metadata.title ?? null);
       return { ...r, ...doc };
     } catch (err) {
       return { ...r, metadata: { sourceURL: r.url, error: err.message } };
@@ -97,14 +97,14 @@ export async function search(ctx, body) {
   return { success: true, data };
 }
 
-export function startExtract(ctx, body) {
+export async function startExtract(ctx, body) {
   const { origin: _o, integration: _i, ...data } = extractBody.parse(body);
-  const id = ctx.queue.add({ type: "extract", priority: 10, data });
+  const id = await ctx.queue.add({ type: "extract", priority: 10, data });
   return { success: true, id, urlTrace: [] };
 }
 
-export function extractStatus(ctx, id) {
-  const job = ctx.queue.get(id);
+export async function extractStatus(ctx, id) {
+  const job = await ctx.queue.get(id);
   if (!job || job.type !== "extract") throw new NotFoundError("Extract job not found");
   const status = { queued: "processing", active: "processing", completed: "completed", failed: "failed" }[job.status];
   const r = job.result ?? {};

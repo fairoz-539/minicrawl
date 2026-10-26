@@ -19,6 +19,7 @@ function New-RandomHex {
 
 $apiKey = New-RandomHex
 $searxngSecret = New-RandomHex
+$postgresPassword = New-RandomHex
 
 $anthropicKey = $AnthropicKey
 # Ask only when someone is at the keyboard (scripts/CI pass -AnthropicKey or -SkipAnthropic).
@@ -31,6 +32,7 @@ if (-not $anthropicKey -and -not $SkipAnthropic -and -not [Console]::IsInputRedi
 $lines = Get-Content .env.example | ForEach-Object {
   if ($_ -match '^API_KEY=') { "API_KEY=$apiKey" }
   elseif ($_ -match '^SEARXNG_SECRET=') { "SEARXNG_SECRET=$searxngSecret" }
+  elseif ($_ -match '^POSTGRES_PASSWORD=') { "POSTGRES_PASSWORD=$postgresPassword" }
   elseif ($anthropicKey -and $_ -match '^# ANTHROPIC_API_KEY=') { "ANTHROPIC_API_KEY=$anthropicKey" }
   else { $_ }
 }

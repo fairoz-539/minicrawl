@@ -1,4 +1,5 @@
-// Storage + job queue on SQLite (node:sqlite).
+// Storage + job queue on SQLite (node:sqlite): the default, zero-setup backend.
+// src/db-postgres.js implements the same async interface for scale mode.
 //
 // Mirrors Firecrawl's NuQ design (apps/nuq-postgres/nuq.sql) at small scale:
 //  - jobs table with status/priority/lock/stalls, claimed atomically
@@ -118,53 +119,53 @@ export class Queue {
     };
   }
 
-  add({ type, data, priority = 10, groupId = null, id = randomUUID() }) {
+  async add({ type, data, priority = 10, groupId = null, id = randomUUID() }) {
     // created_at gets a sub-millisecond tiebreaker so FIFO order is stable.
     const createdAt = Date.now() * 1000 + (this.seq++ % 1000);
     this.stmts.add.run(id, type, priority, JSON.stringify(data), groupId, createdAt);
     return id;
   }
 
-  claim() {
+  async claim() {
     const lock = randomUUID();
     const job = rowToJob(this.stmts.claim.get(lock, Date.now()));
     return job ? { ...job, lock } : null;
   }
 
-  renew(job) {
+  async renew(job) {
     this.stmts.renew.run(Date.now(), job.id, job.lock);
   }
 
-  finish(job, result) {
+  async finish(job, result) {
     // A null result (duplicate/cancelled page) is stored as SQL NULL.
     this.stmts.finish.run(result == null ? null : JSON.stringify(result), Date.now(), job.id, job.lock);
   }
 
-  fail(job, error) {
+  async fail(job, error) {
     this.stmts.fail.run(String(error), Date.now(), job.id, job.lock);
   }
 
   /** Requeue jobs whose lock was not renewed within staleMs. */
-  reap(staleMs = 60_000, maxStalls = 3) {
+  async reap(staleMs = 60_000, maxStalls = 3) {
     const now = Date.now();
     return this.stmts.reap.run(maxStalls, maxStalls, maxStalls, now, now - staleMs).changes;
   }
 
-  get(id) {
+  async get(id) {
     return rowToJob(this.stmts.get.get(id));
   }
 
-  groupCounts(groupId) {
+  async groupCounts(groupId) {
     const counts = { queued: 0, active: 0, completed: 0, failed: 0, skipped: 0 };
     for (const { status, n } of this.stmts.groupCounts.all(groupId)) counts[status] = n;
     return counts;
   }
 
-  groupDocuments(groupId, offset, limit) {
+  async groupDocuments(groupId, offset, limit) {
     return this.stmts.groupCompleted.all(groupId, limit, offset).map(r => parse(r.result));
   }
 
-  groupErrors(groupId) {
+  async groupErrors(groupId) {
     return this.stmts.groupFailed.all(groupId).map(r => ({
       id: r.id,
       url: parse(r.data).url,
@@ -172,7 +173,7 @@ export class Queue {
     }));
   }
 
-  dropQueued(groupId) {
+  async dropQueued(groupId) {
     return this.stmts.dropQueued.run(groupId).changes;
   }
 }
@@ -206,24 +207,24 @@ export class CrawlStore {
     };
   }
 
-  create(id, crawl) {
+  async create(id, crawl) {
     this.stmts.create.run(id, JSON.stringify(crawl), Date.now());
   }
 
-  get(id) {
+  async get(id) {
     const row = this.stmts.get.get(id);
     return row ? { ...row, data: parse(row.data) } : null;
   }
 
-  save(id, crawl) {
+  async save(id, crawl) {
     this.stmts.save.run(JSON.stringify(crawl), id);
   }
 
-  setStatus(id, status) {
+  async setStatus(id, status) {
     return this.stmts.setStatus.run(status, Date.now(), id).changes > 0;
   }
 
-  finishIdleCrawls() {
+  async finishIdleCrawls() {
     return this.stmts.finishIdle.all(Date.now()).map(r => r.id);
   }
 
@@ -231,24 +232,24 @@ export class CrawlStore {
    * Claim a URL for a crawl. Returns true only for the first caller.
    * `limit` caps how many URLs a crawl may ever claim.
    */
-  lockURL(crawlId, url, limit) {
+  async lockURL(crawlId, url, limit) {
     if (typeof limit === "number" && this.stmts.visitedCount.get(crawlId).n >= limit) return false;
     return this.stmts.lock.run(crawlId, url).changes === 1;
   }
 
-  isVisited(crawlId, url) {
+  async isVisited(crawlId, url) {
     return !!this.stmts.isVisited.get(crawlId, url);
   }
 
-  recordRobotsBlocked(crawlId, urls) {
+  async recordRobotsBlocked(crawlId, urls) {
     for (const url of urls) this.stmts.robotsBlocked.run(crawlId, url);
   }
 
-  robotsBlocked(crawlId) {
+  async robotsBlocked(crawlId) {
     return this.stmts.listRobotsBlocked.all(crawlId).map(r => r.url);
   }
 
-  recordSeen(url, title = null) {
+  async recordSeen(url, title = null) {
     try {
       const host = new URL(url).hostname.replace(/^www\./, "");
       this.stmts.seen.run(host, url, title, Date.now());
@@ -264,7 +265,7 @@ export class CrawlStore {
    * A TTL of 0 keeps that data forever.
    * @returns {{crawls: number, jobs: number, seenUrls: number}}
    */
-  pruneExpired({ dataTtlMs, seenTtlMs, batch = 200, now = Date.now() }) {
+  async pruneExpired({ dataTtlMs, seenTtlMs, batch = 200, now = Date.now() }) {
     const out = { crawls: 0, jobs: 0, seenUrls: 0 };
     const db = this.db;
     db.exec("BEGIN IMMEDIATE");
@@ -301,8 +302,29 @@ export class CrawlStore {
     return out;
   }
 
-  seenForHost(host, limit = 10_000) {
+  async seenForHost(host, limit = 10_000) {
     const bare = host.replace(/^www\./, "");
     return this.stmts.seenForHost.all(bare, `%.${bare}`, limit);
   }
+}
+
+/** The storage interface every backend provides (see src/storage.js). */
+export function openSqliteStorage(path) {
+  const db = openDb(path);
+  return {
+    kind: "sqlite",
+    queue: new Queue(db),
+    store: new CrawlStore(db),
+    async ping() {
+      db.prepare("SELECT 1").get();
+    },
+    /** Run raw SQL with `?` placeholders (tests and maintenance only). */
+    async exec(sql, ...params) {
+      const stmt = db.prepare(sql);
+      return /^\s*(select|with)\b/i.test(sql) ? stmt.all(...params) : stmt.run(...params);
+    },
+    async close() {
+      db.close();
+    },
+  };
 }

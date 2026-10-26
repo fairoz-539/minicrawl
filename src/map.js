@@ -64,8 +64,8 @@ export async function getMapResults(store, url, opts = {}) {
         .catch(() => []),
     );
     sources.push(
-      Promise.resolve(
-        store.seenForHost(host).map(r => {
+      store.seenForHost(host).then(rows =>
+        rows.map(r => {
           if (r.title) titles.set(r.url, r.title);
           return r.url;
         }),

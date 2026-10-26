@@ -30,6 +30,42 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm test
 
+  postgres:
+    name: Tests (Node 24, Postgres scale mode)
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: minicrawl
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      STORAGE: postgres
+      DATABASE_URL: postgres://postgres:ci@localhost:5432/minicrawl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      # The whole suite on Postgres, plus test/scale.test.js (separate API and
+      # worker processes, killed-worker recovery), which only runs here.
+      - run: npm test
+
+  helm:
+    name: Helm chart
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: helm lint deploy/helm/minicrawl --set apiKeys=ci-key-0123456789abcdef,databaseUrl=postgres://u:p@db/minicrawl
+      - run: helm template ci deploy/helm/minicrawl --set apiKeys=ci-key-0123456789abcdef,databaseUrl=postgres://u:p@db/minicrawl,worker.autoscaling.enabled=true,ingress.enabled=true > /dev/null
+
   python:
     name: Python client + LangChain/LlamaIndex (Python ${{ matrix.python }})
     runs-on: ubuntu-24.04

@@ -1,0 +1,21 @@
+# SearXNG settings for minicrawl's bundled search instance.
+# It is private (not published to the host) and only queried by minicrawl.
+use_default_settings: true
+
+general:
+  instance_name: "minicrawl search"
+
+server:
+  # Overridden by the SEARXNG_SECRET environment variable (see docker-compose.yml).
+  secret_key: "minicrawl-internal-change-me"
+  # minicrawl is the only client, so SearXNG's bot limiter would only get in the way.
+  limiter: false
+  public_instance: false
+  image_proxy: false
+
+search:
+  safe_search: 0
+  # minicrawl reads results as JSON.
+  formats:
+    - html
+    - json

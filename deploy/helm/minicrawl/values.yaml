@@ -1,0 +1,64 @@
+# minicrawl Helm values. Required: a Postgres database (databaseUrl) and at
+# least one API key (apiKeys), or an existing Secret holding both.
+
+image:
+  repository: ghcr.io/fairoz-539/minicrawl
+  tag: ""            # defaults to the chart's appVersion
+  pullPolicy: IfNotPresent
+
+# Comma-separated API keys clients send as "Authorization: Bearer <key>".
+# Generate with: openssl rand -hex 32
+apiKeys: ""
+# postgres://user:password@host:5432/minicrawl (Postgres 14+)
+databaseUrl: ""
+# Optional: enables AI extraction (json format, /v1/extract).
+anthropicApiKey: ""
+# Use an existing Secret instead (keys: API_KEYS, DATABASE_URL, optional ANTHROPIC_API_KEY).
+existingSecret: ""
+
+# Extra environment variables for API and workers (see .env.example), e.g.
+#   DATA_TTL_HOURS: "48"
+#   PROXY_URLS: "http://user:pass@proxy:8080"
+env: {}
+
+api:
+  replicas: 2
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { memory: 2Gi }
+  service:
+    type: ClusterIP
+    port: 3002
+
+worker:
+  replicas: 2
+  concurrency: 4          # jobs per worker pod (WORKERS)
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { memory: 3Gi }
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+# Shared memory for Chromium (Docker's 64 MB default makes pages crash).
+shmSize: 1Gi
+
+searxng:
+  enabled: true           # private search engine for /v1/search
+  image: searxng/searxng:latest
+  secret: ""              # defaults to a random value, kept across upgrades
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: scrape.example.com
+  tls: []                 # - secretName: scrape-tls
+                          #   hosts: [scrape.example.com]
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000         # the image's "node" user
+  fsGroup: 1000

@@ -1,0 +1,76 @@
+{{- if .Values.searxng.enabled }}
+{{- $name := printf "%s-searxng" (include "minicrawl.fullname" .) }}
+{{- /* Keep the generated secret stable across upgrades. */}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
+{{- $secret := .Values.searxng.secret | default (and $existing (index $existing.data "SEARXNG_SECRET" | b64dec)) | default (randAlphaNum 40) }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "minicrawl.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  SEARXNG_SECRET: {{ $secret | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "minicrawl.labels" . | nindent 4 }}
+data:
+  settings.yml: |
+    {{- .Files.Get "files/searxng-settings.yml" | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "minicrawl.labels" . | nindent 4 }}
+    app.kubernetes.io/component: searxng
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "minicrawl.selector" . | nindent 6 }}
+      app.kubernetes.io/component: searxng
+  template:
+    metadata:
+      labels:
+        {{- include "minicrawl.selector" . | nindent 8 }}
+        app.kubernetes.io/component: searxng
+      annotations:
+        checksum/config: {{ .Files.Get "files/searxng-settings.yml" | sha256sum }}
+    spec:
+      containers:
+        - name: searxng
+          image: {{ .Values.searxng.image }}
+          ports:
+            - { name: http, containerPort: 8080 }
+          env:
+            - name: SEARXNG_SECRET
+              valueFrom: { secretKeyRef: { name: {{ $name }}, key: SEARXNG_SECRET } }
+            - { name: SEARXNG_BASE_URL, value: "http://{{ $name }}:8080/" }
+          volumeMounts:
+            - { name: config, mountPath: /etc/searxng/settings.yml, subPath: settings.yml }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+      volumes:
+        - name: config
+          configMap: { name: {{ $name }} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "minicrawl.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "minicrawl.selector" . | nindent 4 }}
+    app.kubernetes.io/component: searxng
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+{{- end }}

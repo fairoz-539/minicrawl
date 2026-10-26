@@ -158,7 +158,7 @@ export function buildMcpServer(ctx, { version, baseUrl }) {
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     tool(async ({ limit = 10, ...body }) => {
-      const { id } = api.startCrawl(ctx, { ...body, limit }, baseUrl);
+      const { id } = await api.startCrawl(ctx, { ...body, limit }, baseUrl);
       return ok(text(`Crawl started. id: ${id}\nCall minicrawl_crawl_status with this id to get progress and pages.`));
     }),
   );
@@ -176,7 +176,7 @@ export function buildMcpServer(ctx, { version, baseUrl }) {
       annotations: { readOnlyHint: true },
     },
     tool(async ({ id, skip = 0, maxChars = DEFAULT_MAX_CHARS }) => {
-      const s = api.crawlStatus(ctx, id, { skip, pageSize: 50 });
+      const s = await api.crawlStatus(ctx, id, { skip, pageSize: 50 });
       const per = Math.max(1000, Math.floor(maxChars / Math.max(1, s.data.length)));
       const pages = s.data.map(d => docText({ metadata: d.metadata, markdown: d.markdown }, per));
       const more = s.data.length === 50 ? `\n\nMore pages available: call again with skip=${skip + 50}.` : "";
@@ -200,10 +200,10 @@ export function buildMcpServer(ctx, { version, baseUrl }) {
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     tool(async body => {
-      const { id } = api.startExtract(ctx, { ...body, showSources: true });
+      const { id } = await api.startExtract(ctx, { ...body, showSources: true });
       const deadline = Date.now() + EXTRACT_WAIT_MS;
       while (Date.now() < deadline) {
-        const s = api.extractStatus(ctx, id);
+        const s = await api.extractStatus(ctx, id);
         if (s.status === "failed") return fail(`Extraction failed: ${s.error}`);
         if (s.status === "completed") {
           return ok(text(`${JSON.stringify(s.data, null, 2)}\n\nSources: ${(s.sources ?? []).join(", ")}${s.warning ? `\nWarning: ${s.warning}` : ""}`));
@@ -223,7 +223,7 @@ export function buildMcpServer(ctx, { version, baseUrl }) {
       annotations: { readOnlyHint: true },
     },
     tool(async ({ id }) => {
-      const s = api.extractStatus(ctx, id);
+      const s = await api.extractStatus(ctx, id);
       if (s.status === "failed") return fail(`Extraction failed: ${s.error}`);
       if (s.status !== "completed") return ok(text("Still processing. Try again shortly."));
       return ok(text(JSON.stringify(s.data, null, 2)));
