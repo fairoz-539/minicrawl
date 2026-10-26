@@ -42,7 +42,7 @@ jobs:
             org.opencontainers.image.title=minicrawl
             org.opencontainers.image.description=Self-hosted, Firecrawl-compatible web scraping API
             org.opencontainers.image.licenses=AGPL-3.0-only
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
