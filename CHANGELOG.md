@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Security
+
+- **zod 3 → 4** (`^4.6.7`), fixing [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) (high): memory exhaustion when validating oversized constrained collections. `npm audit --omit=dev` is clean.
+- **uuid ≥ 11.1.1 for exceljs** (npm `overrides`), fixing [GHSA-w5hq-g745-h8pq](https://github.com/advisories/GHSA-w5hq-g745-h8pq) (moderate). exceljs only calls `uuid.v4()`, which is unchanged in uuid 11.
+
+### Changed
+
+- **400 error text:** the `error` and `details` of `BAD_REQUEST` responses now use zod 4's wording and issue format. For example, `"Required"` becomes `"Invalid input: expected string, received undefined"`, and a bad action type is an `invalid_union` issue. The response shape is unchanged (`success`, `code`, `error`, `details`), and unknown keys are still rejected with `"Unrecognized key in body"`.
+- **OpenAPI:** request schemas are generated with zod 4's built-in `z.toJSONSchema`. The `zod-to-json-schema` dependency is gone. Every route is still documented; action unions are now `oneOf`, and `appendToId` has a UUID pattern.
+
 ## [1.4.0] - 2026-10-27
 
 ### Added

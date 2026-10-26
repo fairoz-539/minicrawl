@@ -9,7 +9,7 @@ export const httpUrl = z
   .string()
   .trim()
   .transform(withScheme)
-  .pipe(z.string().url())
+  .pipe(z.url())
   .refine(s => /^https?:/i.test(s), "URL uses unsupported protocol")
   .describe("http(s) URL. A missing scheme defaults to https://");
 
@@ -68,7 +68,7 @@ export const action = z
 
 export const jsonOptions = z
   .object({
-    schema: z.record(z.any()).optional().describe("JSON Schema for the result"),
+    schema: z.record(z.string(), z.any()).optional().describe("JSON Schema for the result"),
     prompt: z.string().min(1).optional().describe("What to extract, in plain language"),
     systemPrompt: z.string().optional().describe("Extra instructions for the model"),
   })
@@ -98,7 +98,7 @@ export const scrapeOptions = z
     onlyMainContent: z.boolean().default(true).describe("Drop headers, footers, navigation, ads and cookie banners"),
     includeTags: z.array(z.string()).default([]).describe("Keep only these CSS selectors"),
     excludeTags: z.array(z.string()).default([]).describe("Remove these CSS selectors"),
-    headers: z.record(z.string()).default({}).describe("Extra request headers"),
+    headers: z.record(z.string(), z.string()).default({}).describe("Extra request headers"),
     waitFor: z.number().int().min(0).max(60_000).default(0).describe("Milliseconds to wait after load (uses the browser)"),
     timeout: z.number().int().min(1000).max(300_000).default(30_000).describe("Milliseconds before giving up"),
     engine: z.enum(["auto", "fetch", "browser"]).default("auto").describe("Force an engine; auto picks per page"),
@@ -129,8 +129,8 @@ export const webhook = z
     httpUrl,
     z.object({
       url: httpUrl,
-      headers: z.record(z.string()).optional(),
-      metadata: z.record(z.any()).optional().describe("Echoed back in every webhook payload"),
+      headers: z.record(z.string(), z.string()).optional(),
+      metadata: z.record(z.string(), z.any()).optional().describe("Echoed back in every webhook payload"),
       events: z.array(z.enum(["started", "page", "completed", "failed"])).optional().describe("Default: all"),
     }),
   ])
@@ -154,7 +154,7 @@ export const crawlBody = z
     ignoreQueryParameters: z.boolean().default(false).describe("Treat ?a=1 and ?a=2 as the same page"),
     deduplicateSimilarURLs: z.boolean().default(true).describe("Treat www/http(s)/index.html/trailing-slash variants as one page"),
     delay: z.number().min(0).max(60).optional().describe("Seconds to wait before each page (politeness)"),
-    scrapeOptions: scrapeOptions.default({}),
+    scrapeOptions: scrapeOptions.prefault({}),
     webhook: webhook.optional(),
     ...clientMeta,
   })
@@ -177,7 +177,7 @@ export const batchBody = scrapeOptions
     urls: z.array(z.string()).min(1).max(10_000).describe("Pages to scrape"),
     webhook: webhook.optional(),
     ignoreInvalidURLs: z.boolean().default(false).describe("Skip invalid or blocked URLs (listed in invalidURLs) instead of failing"),
-    appendToId: z.string().uuid().optional().describe("Add these URLs to an existing batch"),
+    appendToId: z.uuid().optional().describe("Add these URLs to an existing batch"),
     maxConcurrency: z.number().int().positive().optional().describe("Accepted for compatibility; the team's concurrency limit applies"),
     zeroDataRetention: z.boolean().optional().describe("Zero data retention for this batch"),
     ...clientMeta,
@@ -212,6 +212,13 @@ export const searchBody = z
   .strict()
   .superRefine((b, ctx) => b.scrapeOptions && checkScrapeOptions(b.scrapeOptions, ctx, ["scrapeOptions"]));
 
+// Every key optional and no defaults filled in (what zod 3's .partial() did;
+// zod 4 applies defaults inside optional keys), so only the options the
+// caller sent reach the extract job.
+const unwrapDefault = v => (v instanceof z.ZodDefault ? (v.description ? v.unwrap().describe(v.description) : v.unwrap()) : v);
+const withoutDefaults = schema =>
+  z.strictObject(Object.fromEntries(Object.entries(schema.shape).map(([k, v]) => [k, unwrapDefault(v).optional()])));
+
 export const extractBody = z
   .object({
     urls: z
@@ -231,11 +238,11 @@ export const extractBody = z
       )
       .describe("Pages to read. https://site.com/* expands to the site's most relevant pages. Without URLs, the prompt is searched on the web"),
     prompt: z.string().min(1).optional().describe("What to extract"),
-    schema: z.record(z.any()).optional().describe("JSON Schema for the result"),
+    schema: z.record(z.string(), z.any()).optional().describe("JSON Schema for the result"),
     systemPrompt: z.string().optional(),
     enableWebSearch: z.boolean().default(false).describe("Also read the top 3 web search results for the prompt"),
     showSources: z.boolean().default(false).describe("Include the URLs that were read"),
-    scrapeOptions: scrapeOptions.omit({ formats: true, jsonOptions: true, actions: true }).partial().optional(),
+    scrapeOptions: withoutDefaults(scrapeOptions.omit({ formats: true, jsonOptions: true, actions: true })).optional(),
     ...clientMeta,
   })
   .strict()
